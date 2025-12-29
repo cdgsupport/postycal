@@ -1,6 +1,6 @@
 # PostyCal
 
-**Version:** 2.0.0  
+**Version:** 2.0.5  
 **Requires WordPress:** 6.0+  
 **Requires PHP:** 8.2+  
 **License:** GPL v3 or later
