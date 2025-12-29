@@ -136,10 +136,11 @@ class Date_Handler {
      * Parse a date string into a DateTimeImmutable object.
      *
      * Handles various ACF date formats including:
-     * - Ymd (20250115) - ACF Date Picker default
+     * - Ymd (20250115) - ACF Date Picker default save format
      * - Y-m-d (2025-01-15) - Standard date
-     * - Y-m-d H:i:s (2025-01-15 14:30:00) - ACF Date/Time Picker
-     * - d/m/Y, m/d/Y, and other common formats
+     * - Y-m-d H:i:s (2025-01-15 14:30:00) - ACF Date/Time Picker 24hr
+     * - d/m/Y g:i a (29/12/2025 11:24 am) - ACF Date/Time Picker 12hr
+     * - And many other common formats
      *
      * @param mixed $value The date value (string or other format).
      * @return DateTimeImmutable|null The parsed date or null.
@@ -164,24 +165,56 @@ class Date_Handler {
 
         $timezone = self::get_timezone();
 
-        // Try ACF's common formats first.
+        // Normalize am/pm variations (AM, PM, a.m., p.m., etc.)
+        $normalized_value = trim( $value );
+        $normalized_value = preg_replace( '/\s+/', ' ', $normalized_value ); // Normalize whitespace
+        $normalized_value = preg_replace( '/a\.?\s*m\.?/i', 'am', $normalized_value );
+        $normalized_value = preg_replace( '/p\.?\s*m\.?/i', 'pm', $normalized_value );
+
+        // Try ACF's common formats first - ORDER MATTERS (most specific first).
         $acf_formats = [
-            'Ymd',           // ACF Date Picker default: 20250115
-            'Y-m-d',         // Standard date: 2025-01-15
-            'Y-m-d H:i:s',   // ACF Date/Time Picker: 2025-01-15 14:30:00
-            'Ymd H:i:s',     // Alternative datetime: 20250115 14:30:00
-            'd/m/Y',         // European format: 15/01/2025
-            'm/d/Y',         // US format: 01/15/2025
-            'd/m/Y H:i:s',   // European datetime
-            'm/d/Y H:i:s',   // US datetime
-            'd-m-Y',         // European with dashes
-            'm-d-Y',         // US with dashes
-            'Y/m/d',         // Alternative: 2025/01/15
-            'Y/m/d H:i:s',   // Alternative datetime
+            // 12-hour formats with am/pm (most specific first).
+            'd/m/Y g:i a',   // 29/12/2025 11:24 am - ACF Date/Time 12hr European
+            'd/m/Y g:i:s a', // 29/12/2025 11:24:00 am
+            'm/d/Y g:i a',   // 12/29/2025 11:24 am - US format
+            'm/d/Y g:i:s a', // 12/29/2025 11:24:00 am
+            'Y-m-d g:i a',   // 2025-12-29 11:24 am
+            'Y-m-d g:i:s a', // 2025-12-29 11:24:00 am
+            'd-m-Y g:i a',   // 29-12-2025 11:24 am
+            'Y/m/d g:i a',   // 2025/12/29 11:24 am
+            'F j, Y g:i a',  // January 15, 2025 2:30 pm
+            'j F Y g:i a',   // 15 January 2025 2:30 pm
+            
+            // 24-hour datetime formats.
+            'Y-m-d H:i:s',   // 2025-01-15 14:30:00 - Standard MySQL/ACF
+            'Y-m-d H:i',     // 2025-01-15 14:30
+            'd/m/Y H:i:s',   // 15/01/2025 14:30:00
+            'd/m/Y H:i',     // 15/01/2025 14:30
+            'm/d/Y H:i:s',   // 01/15/2025 14:30:00
+            'm/d/Y H:i',     // 01/15/2025 14:30
+            'd-m-Y H:i:s',   // 15-01-2025 14:30:00
+            'd-m-Y H:i',     // 15-01-2025 14:30
+            'Y/m/d H:i:s',   // 2025/01/15 14:30:00
+            'Y/m/d H:i',     // 2025/01/15 14:30
+            'Ymd H:i:s',     // 20250115 14:30:00
+            
+            // Date-only formats.
+            'Ymd',           // 20250115 - ACF Date Picker default save
+            'Y-m-d',         // 2025-01-15 - Standard date
+            'd/m/Y',         // 15/01/2025 - European
+            'm/d/Y',         // 01/15/2025 - US
+            'd-m-Y',         // 15-01-2025 - European with dashes
+            'm-d-Y',         // 01-15-2025 - US with dashes
+            'Y/m/d',         // 2025/01/15
+            
+            // Long formats.
+            'F j, Y',        // January 15, 2025
+            'j F Y',         // 15 January 2025
         ];
 
         foreach ( $acf_formats as $format ) {
-            $date = DateTimeImmutable::createFromFormat( $format, $value, $timezone );
+            $date = DateTimeImmutable::createFromFormat( $format, $normalized_value, $timezone );
+            
             if ( false !== $date ) {
                 // Verify the date is valid (createFromFormat can create invalid dates).
                 $errors = DateTimeImmutable::getLastErrors();
@@ -189,9 +222,10 @@ class Date_Handler {
                     Logger::debug(
                         'Parsed date successfully',
                         [
-                            'value'  => $value,
-                            'format' => $format,
-                            'result' => $date->format( 'Y-m-d H:i:s' ),
+                            'original'   => $value,
+                            'normalized' => $normalized_value,
+                            'format'     => $format,
+                            'result'     => $date->format( 'Y-m-d H:i:s' ),
                         ]
                     );
                     return $date;
@@ -199,9 +233,9 @@ class Date_Handler {
             }
         }
 
-        // Fallback: try PHP's natural parsing.
+        // Fallback: try PHP's natural parsing (strtotime-based).
         try {
-            $date = new DateTimeImmutable( $value, $timezone );
+            $date = new DateTimeImmutable( $normalized_value, $timezone );
             Logger::debug(
                 'Parsed date with natural parsing',
                 [
