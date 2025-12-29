@@ -162,17 +162,61 @@ class Cron_Handler {
     /**
      * Set initial category when post is saved.
      *
-     * @param int $post_id The post ID.
+     * Called by acf/save_post and save_post hooks. The post_id can be:
+     * - int: Regular post ID
+     * - string 'new_post': New post being created (ACF)
+     * - string 'options': Options page (ACF)
+     * - string '{taxonomy}_{term_id}': Term being edited (ACF)
+     * - string 'user_{user_id}': User being edited (ACF)
+     *
+     * @param int|string $post_id The post ID (can be string for special ACF cases).
+     * @param \WP_Post|null $post The post object (only from save_post hook).
+     * @param bool|null $update Whether this is an update (only from save_post hook).
      * @return void
      */
-    public function set_initial_category( int $post_id ): void {
+    public function set_initial_category( int|string $post_id, ?\WP_Post $post = null, ?bool $update = null ): void {
+        // Skip non-post contexts (options pages, terms, users, new posts).
+        if ( ! is_numeric( $post_id ) ) {
+            Logger::debug( 'Skipping non-post context', [ 'post_id' => $post_id ] );
+            return;
+        }
+
+        $post_id = (int) $post_id;
+
+        // Skip autosaves.
+        if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+            Logger::debug( 'Skipping autosave', [ 'post_id' => $post_id ] );
+            return;
+        }
+
+        // Skip revisions.
+        if ( wp_is_post_revision( $post_id ) ) {
+            Logger::debug( 'Skipping revision', [ 'post_id' => $post_id ] );
+            return;
+        }
+
         $post_type = get_post_type( $post_id );
 
         if ( false === $post_type ) {
+            Logger::debug( 'Could not determine post type', [ 'post_id' => $post_id ] );
             return;
         }
 
         $schedules = $this->schedule_manager->get_for_post_type( $post_type );
+
+        if ( empty( $schedules ) ) {
+            // Don't log this - it's expected for most post types.
+            return;
+        }
+
+        Logger::debug(
+            'Processing post save',
+            [
+                'post_id'        => $post_id,
+                'post_type'      => $post_type,
+                'schedule_count' => count( $schedules ),
+            ]
+        );
 
         foreach ( $schedules as $schedule ) {
             $this->assign_category_by_date( $post_id, $schedule );
@@ -198,14 +242,25 @@ class Cron_Handler {
             return;
         }
 
+        // Log what we're looking for.
+        Logger::debug(
+            'Looking for date field',
+            [
+                'post_id'    => $post_id,
+                'field_name' => $schedule->date_field,
+                'field_type' => $schedule->field_type,
+            ]
+        );
+
         $date = Date_Handler::get_post_date( $post_id, $schedule );
 
         if ( null === $date ) {
-            Logger::debug(
-                'No date found during save',
+            Logger::info(
+                'No date found during save - skipping category assignment',
                 [
-                    'post_id'  => $post_id,
-                    'schedule' => $schedule->name,
+                    'post_id'    => $post_id,
+                    'schedule'   => $schedule->name,
+                    'field_name' => $schedule->date_field,
                 ]
             );
             return;
@@ -213,6 +268,18 @@ class Cron_Handler {
 
         $is_past = Date_Handler::is_date_past( $date, null, $schedule->use_time );
         $term    = $is_past ? $schedule->past_term : $schedule->upcoming_term;
+
+        Logger::info(
+            'Assigning category based on date',
+            [
+                'post_id'   => $post_id,
+                'schedule'  => $schedule->name,
+                'date'      => $date->format( 'Y-m-d H:i:s' ),
+                'is_past'   => $is_past,
+                'term'      => $term,
+                'use_time'  => $schedule->use_time,
+            ]
+        );
 
         $this->set_post_term( $post_id, $schedule, $term );
     }

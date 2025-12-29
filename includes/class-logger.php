@@ -119,12 +119,16 @@ class Logger {
             return true;
         }
 
-        // Only log debug/info if POSTYCAL_DEBUG is defined.
+        // Log INFO level by default when WP_DEBUG is on.
+        if ( self::LEVEL_INFO === $level ) {
+            return true;
+        }
+
+        // Only log DEBUG if POSTYCAL_DEBUG is defined.
         if ( defined( 'POSTYCAL_DEBUG' ) && POSTYCAL_DEBUG ) {
             return true;
         }
 
-        // Default: only log info level and above.
-        return self::LEVEL_INFO === $level;
+        return false;
     }
 }

@@ -50,6 +50,16 @@ class Date_Handler {
     private static function get_single_date( int $post_id, string $field_name ): ?DateTimeImmutable {
         $value = get_field( $field_name, $post_id );
 
+        Logger::debug(
+            'Retrieved ACF field value',
+            [
+                'post_id'    => $post_id,
+                'field_name' => $field_name,
+                'value'      => $value,
+                'type'       => gettype( $value ),
+            ]
+        );
+
         if ( empty( $value ) ) {
             return null;
         }
@@ -125,6 +135,12 @@ class Date_Handler {
     /**
      * Parse a date string into a DateTimeImmutable object.
      *
+     * Handles various ACF date formats including:
+     * - Ymd (20250115) - ACF Date Picker default
+     * - Y-m-d (2025-01-15) - Standard date
+     * - Y-m-d H:i:s (2025-01-15 14:30:00) - ACF Date/Time Picker
+     * - d/m/Y, m/d/Y, and other common formats
+     *
      * @param mixed $value The date value (string or other format).
      * @return DateTimeImmutable|null The parsed date or null.
      */
@@ -141,24 +157,69 @@ class Date_Handler {
             return DateTimeImmutable::createFromMutable( $value );
         }
 
-        if ( is_string( $value ) ) {
-            try {
-                // Try standard formats.
-                $date = new DateTimeImmutable( $value, self::get_timezone() );
-                return $date;
-            } catch ( \Exception $e ) {
-                Logger::debug(
-                    'Failed to parse date',
-                    [
-                        'value' => $value,
-                        'error' => $e->getMessage(),
-                    ]
-                );
-                return null;
+        if ( ! is_string( $value ) ) {
+            Logger::debug( 'Date value is not a string', [ 'type' => gettype( $value ) ] );
+            return null;
+        }
+
+        $timezone = self::get_timezone();
+
+        // Try ACF's common formats first.
+        $acf_formats = [
+            'Ymd',           // ACF Date Picker default: 20250115
+            'Y-m-d',         // Standard date: 2025-01-15
+            'Y-m-d H:i:s',   // ACF Date/Time Picker: 2025-01-15 14:30:00
+            'Ymd H:i:s',     // Alternative datetime: 20250115 14:30:00
+            'd/m/Y',         // European format: 15/01/2025
+            'm/d/Y',         // US format: 01/15/2025
+            'd/m/Y H:i:s',   // European datetime
+            'm/d/Y H:i:s',   // US datetime
+            'd-m-Y',         // European with dashes
+            'm-d-Y',         // US with dashes
+            'Y/m/d',         // Alternative: 2025/01/15
+            'Y/m/d H:i:s',   // Alternative datetime
+        ];
+
+        foreach ( $acf_formats as $format ) {
+            $date = DateTimeImmutable::createFromFormat( $format, $value, $timezone );
+            if ( false !== $date ) {
+                // Verify the date is valid (createFromFormat can create invalid dates).
+                $errors = DateTimeImmutable::getLastErrors();
+                if ( false === $errors || ( 0 === $errors['warning_count'] && 0 === $errors['error_count'] ) ) {
+                    Logger::debug(
+                        'Parsed date successfully',
+                        [
+                            'value'  => $value,
+                            'format' => $format,
+                            'result' => $date->format( 'Y-m-d H:i:s' ),
+                        ]
+                    );
+                    return $date;
+                }
             }
         }
 
-        return null;
+        // Fallback: try PHP's natural parsing.
+        try {
+            $date = new DateTimeImmutable( $value, $timezone );
+            Logger::debug(
+                'Parsed date with natural parsing',
+                [
+                    'value'  => $value,
+                    'result' => $date->format( 'Y-m-d H:i:s' ),
+                ]
+            );
+            return $date;
+        } catch ( \Exception $e ) {
+            Logger::warning(
+                'Failed to parse date',
+                [
+                    'value' => $value,
+                    'error' => $e->getMessage(),
+                ]
+            );
+            return null;
+        }
     }
 
     /**

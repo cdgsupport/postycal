@@ -88,10 +88,12 @@ final class Core {
         // Register cron hook.
         add_action( 'pc_daily_category_check', [ $this->cron_handler, 'process_all_schedules' ] );
 
-        // ACF save hook for initial category assignment.
-        if ( $this->schedule_manager->has_schedules() ) {
-            add_action( 'acf/save_post', [ $this->cron_handler, 'set_initial_category' ], 20 );
-        }
+        // ACF save hook for initial category assignment (priority 20 = after ACF saves at 10).
+        add_action( 'acf/save_post', [ $this->cron_handler, 'set_initial_category' ], 20 );
+
+        // Fallback: also hook into save_post for non-ACF saves or as backup.
+        // Priority 99 ensures it runs after most other save operations.
+        add_action( 'save_post', [ $this->cron_handler, 'set_initial_category' ], 99 );
     }
 
     /**
