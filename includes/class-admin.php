@@ -58,10 +58,14 @@ class Admin {
         add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_assets' ] );
         add_action( 'admin_notices', [ $this, 'display_date_field_warning' ] );
 
-        // AJAX handlers.
+        // AJAX handlers for schedule management.
         add_action( 'wp_ajax_postycal_save_schedule', [ $this, 'ajax_save_schedule' ] );
         add_action( 'wp_ajax_postycal_delete_schedule', [ $this, 'ajax_delete_schedule' ] );
         add_action( 'wp_ajax_postycal_trigger_cron', [ $this, 'ajax_trigger_cron' ] );
+
+        // AJAX handlers for dynamic field loading.
+        add_action( 'wp_ajax_postycal_get_acf_fields', [ $this, 'ajax_get_acf_fields' ] );
+        add_action( 'wp_ajax_postycal_get_taxonomy_terms', [ $this, 'ajax_get_taxonomy_terms' ] );
     }
 
     /**
@@ -124,14 +128,28 @@ class Admin {
      */
     private function get_i18n_strings(): array {
         return [
-            'confirmDelete'   => __( 'Are you sure you want to delete this schedule?', 'postycal' ),
-            'saveError'       => __( 'Error saving schedule. Please try again.', 'postycal' ),
-            'deleteError'     => __( 'Error deleting schedule. Please try again.', 'postycal' ),
-            'triggerSuccess'  => __( 'Schedules processed successfully.', 'postycal' ),
-            'triggerError'    => __( 'Error processing schedules. Please try again.', 'postycal' ),
-            'addSchedule'     => __( 'Add New Schedule', 'postycal' ),
-            'editSchedule'    => __( 'Edit Schedule', 'postycal' ),
-            'processing'      => __( 'Processing...', 'postycal' ),
+            'confirmDelete'        => __( 'Are you sure you want to delete this schedule?', 'postycal' ),
+            'saveError'            => __( 'Error saving schedule. Please try again.', 'postycal' ),
+            'deleteError'          => __( 'Error deleting schedule. Please try again.', 'postycal' ),
+            'triggerSuccess'       => __( 'Schedules processed successfully.', 'postycal' ),
+            'triggerError'         => __( 'Error processing schedules. Please try again.', 'postycal' ),
+            'addSchedule'          => __( 'Add New Schedule', 'postycal' ),
+            'editSchedule'         => __( 'Edit Schedule', 'postycal' ),
+            'processing'           => __( 'Processing...', 'postycal' ),
+            // Dynamic dropdown strings.
+            'selectPostTypeFirst'  => __( 'Select Post Type first', 'postycal' ),
+            'selectTaxonomyFirst'  => __( 'Select Taxonomy first', 'postycal' ),
+            'selectRepeaterFirst'  => __( 'Select a repeater field first', 'postycal' ),
+            'selectDateField'      => __( 'Select a date field', 'postycal' ),
+            'selectSubField'       => __( 'Select a sub-field', 'postycal' ),
+            'selectTerm'           => __( 'Select a term', 'postycal' ),
+            'loading'              => __( 'Loading...', 'postycal' ),
+            'noFieldsFound'        => __( 'No date fields found', 'postycal' ),
+            'noTermsFound'         => __( 'No terms found', 'postycal' ),
+            'errorLoadingFields'   => __( 'Error loading fields', 'postycal' ),
+            'errorLoadingTerms'    => __( 'Error loading terms', 'postycal' ),
+            'dateFields'           => __( 'Date Fields', 'postycal' ),
+            'repeaterFields'       => __( 'Repeater Fields (with date sub-fields)', 'postycal' ),
         ];
     }
 
@@ -255,6 +273,201 @@ class Admin {
             'message' => __( 'Schedules processed successfully.', 'postycal' ),
             'results' => $results,
         ] );
+    }
+
+    /**
+     * AJAX handler for getting ACF fields for a post type.
+     *
+     * @return void
+     */
+    public function ajax_get_acf_fields(): void {
+        $this->verify_ajax_request();
+
+        if ( ! isset( $_POST['post_type'] ) ) {
+            wp_send_json_error( [ 'message' => __( 'Post type is required.', 'postycal' ) ] );
+        }
+
+        $post_type = sanitize_key( wp_unslash( $_POST['post_type'] ) );
+
+        if ( ! post_type_exists( $post_type ) ) {
+            wp_send_json_error( [ 'message' => __( 'Invalid post type.', 'postycal' ) ] );
+        }
+
+        $fields = $this->get_acf_date_fields_for_post_type( $post_type );
+
+        wp_send_json_success( [
+            'fields' => $fields,
+        ] );
+    }
+
+    /**
+     * AJAX handler for getting taxonomy terms.
+     *
+     * @return void
+     */
+    public function ajax_get_taxonomy_terms(): void {
+        $this->verify_ajax_request();
+
+        if ( ! isset( $_POST['taxonomy'] ) ) {
+            wp_send_json_error( [ 'message' => __( 'Taxonomy is required.', 'postycal' ) ] );
+        }
+
+        $taxonomy = sanitize_key( wp_unslash( $_POST['taxonomy'] ) );
+
+        if ( ! taxonomy_exists( $taxonomy ) ) {
+            wp_send_json_error( [ 'message' => __( 'Invalid taxonomy.', 'postycal' ) ] );
+        }
+
+        $terms = $this->get_taxonomy_terms( $taxonomy );
+
+        wp_send_json_success( [
+            'terms' => $terms,
+        ] );
+    }
+
+    /**
+     * Get ACF date fields for a post type.
+     *
+     * @param string $post_type The post type.
+     * @return array<int, array<string, string>> Array of field data.
+     */
+    private function get_acf_date_fields_for_post_type( string $post_type ): array {
+        $fields = [];
+
+        // Check if ACF is active.
+        if ( ! function_exists( 'acf_get_field_groups' ) || ! function_exists( 'acf_get_fields' ) ) {
+            return $fields;
+        }
+
+        // Get all field groups for this post type.
+        $field_groups = acf_get_field_groups( [
+            'post_type' => $post_type,
+        ] );
+
+        foreach ( $field_groups as $group ) {
+            $group_fields = acf_get_fields( $group['key'] );
+
+            if ( ! is_array( $group_fields ) ) {
+                continue;
+            }
+
+            foreach ( $group_fields as $field ) {
+                $this->extract_date_fields( $field, $fields, $group['title'] );
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Extract date fields from ACF field (handles nested/repeater fields).
+     *
+     * @param array<string, mixed>               $field      The ACF field.
+     * @param array<int, array<string, string>> &$fields    Reference to fields array.
+     * @param string                             $group_name The field group name.
+     * @param string                             $prefix     The field name prefix for nested fields.
+     * @return void
+     */
+    private function extract_date_fields( array $field, array &$fields, string $group_name, string $prefix = '' ): void {
+        $field_name = $prefix ? $prefix . '_' . $field['name'] : $field['name'];
+        $field_type = $field['type'] ?? '';
+
+        // Date and date/time picker fields.
+        if ( in_array( $field_type, [ 'date_picker', 'date_time_picker' ], true ) ) {
+            $fields[] = [
+                'name'       => $field['name'],
+                'label'      => $field['label'] ?? $field['name'],
+                'type'       => $field_type,
+                'group'      => $group_name,
+                'full_name'  => $field_name,
+                'is_subfield' => ! empty( $prefix ),
+                'parent'     => $prefix,
+            ];
+        }
+
+        // Repeater fields - look for date fields inside.
+        if ( 'repeater' === $field_type && ! empty( $field['sub_fields'] ) ) {
+            $fields[] = [
+                'name'        => $field['name'],
+                'label'       => $field['label'] ?? $field['name'],
+                'type'        => 'repeater',
+                'group'       => $group_name,
+                'full_name'   => $field_name,
+                'is_subfield' => false,
+                'parent'      => '',
+                'sub_fields'  => $this->get_repeater_date_subfields( $field['sub_fields'] ),
+            ];
+        }
+
+        // Flexible content and groups - recursively check for date fields.
+        if ( in_array( $field_type, [ 'group', 'flexible_content' ], true ) ) {
+            $sub_fields = $field['sub_fields'] ?? $field['layouts'] ?? [];
+            foreach ( $sub_fields as $sub_field ) {
+                if ( isset( $sub_field['sub_fields'] ) ) {
+                    // Layout in flexible content.
+                    foreach ( $sub_field['sub_fields'] as $layout_field ) {
+                        $this->extract_date_fields( $layout_field, $fields, $group_name, $field['name'] );
+                    }
+                } else {
+                    $this->extract_date_fields( $sub_field, $fields, $group_name, $field['name'] );
+                }
+            }
+        }
+    }
+
+    /**
+     * Get date subfields from a repeater field.
+     *
+     * @param array<int, array<string, mixed>> $sub_fields The repeater's sub fields.
+     * @return array<int, array<string, string>> Array of date subfield data.
+     */
+    private function get_repeater_date_subfields( array $sub_fields ): array {
+        $date_subfields = [];
+
+        foreach ( $sub_fields as $sub_field ) {
+            $field_type = $sub_field['type'] ?? '';
+
+            if ( in_array( $field_type, [ 'date_picker', 'date_time_picker' ], true ) ) {
+                $date_subfields[] = [
+                    'name'  => $sub_field['name'],
+                    'label' => $sub_field['label'] ?? $sub_field['name'],
+                    'type'  => $field_type,
+                ];
+            }
+        }
+
+        return $date_subfields;
+    }
+
+    /**
+     * Get terms for a taxonomy.
+     *
+     * @param string $taxonomy The taxonomy name.
+     * @return array<int, array<string, string>> Array of term data.
+     */
+    private function get_taxonomy_terms( string $taxonomy ): array {
+        $terms = get_terms( [
+            'taxonomy'   => $taxonomy,
+            'hide_empty' => false,
+            'orderby'    => 'name',
+            'order'      => 'ASC',
+        ] );
+
+        if ( is_wp_error( $terms ) || empty( $terms ) ) {
+            return [];
+        }
+
+        $term_data = [];
+
+        foreach ( $terms as $term ) {
+            $term_data[] = [
+                'slug' => $term->slug,
+                'name' => $term->name,
+                'id'   => $term->term_id,
+            ];
+        }
+
+        return $term_data;
     }
 
     /**
@@ -493,6 +706,7 @@ class Admin {
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
+                                <p class="description"><?php esc_html_e( 'Select a post type to load available ACF date fields.', 'postycal' ); ?></p>
                             </td>
                         </tr>
                         <tr>
@@ -508,35 +722,38 @@ class Admin {
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
+                                <p class="description"><?php esc_html_e( 'Select a taxonomy to load available terms.', 'postycal' ); ?></p>
                             </td>
                         </tr>
-                        <tr>
+                        <tr id="postycal-date-field-row">
                             <th scope="row">
-                                <label for="postycal-field-type"><?php esc_html_e( 'Field Type', 'postycal' ); ?></label>
+                                <label for="postycal-date-field"><?php esc_html_e( 'ACF Date Field', 'postycal' ); ?></label>
                             </th>
                             <td>
-                                <select id="postycal-field-type" name="field_type" required>
-                                    <option value="single"><?php esc_html_e( 'Single Date Field', 'postycal' ); ?></option>
-                                    <option value="repeater"><?php esc_html_e( 'Repeater Field', 'postycal' ); ?></option>
+                                <select id="postycal-date-field" name="date_field" required>
+                                    <option value=""><?php esc_html_e( 'Select Post Type first', 'postycal' ); ?></option>
                                 </select>
+                                <span class="spinner" id="postycal-fields-spinner"></span>
+                                <p class="description" id="postycal-date-field-desc"><?php esc_html_e( 'Select the ACF date or date/time field to use.', 'postycal' ); ?></p>
+                                <p class="description postycal-manual-entry" style="display: none;">
+                                    <label>
+                                        <input type="checkbox" id="postycal-manual-field-entry">
+                                        <?php esc_html_e( 'Enter field name manually', 'postycal' ); ?>
+                                    </label>
+                                </p>
+                                <input type="text" id="postycal-date-field-manual" name="date_field_manual" class="regular-text" style="display: none;" placeholder="<?php esc_attr_e( 'Enter ACF field name', 'postycal' ); ?>">
                             </td>
                         </tr>
-                        <tr>
+                        <tr id="postycal-sub-field-row" style="display: none;">
                             <th scope="row">
-                                <label for="postycal-date-field"><?php esc_html_e( 'ACF Date Field Name', 'postycal' ); ?></label>
+                                <label for="postycal-sub-field"><?php esc_html_e( 'Date Sub-field', 'postycal' ); ?></label>
                             </th>
                             <td>
-                                <input type="text" id="postycal-date-field" name="date_field" class="regular-text" required>
-                                <p class="description"><?php esc_html_e( 'For repeaters, enter the repeater field name.', 'postycal' ); ?></p>
-                            </td>
-                        </tr>
-                        <tr id="postycal-repeater-options" style="display: none;">
-                            <th scope="row">
-                                <label for="postycal-sub-field"><?php esc_html_e( 'Date Sub-field Name', 'postycal' ); ?></label>
-                            </th>
-                            <td>
-                                <input type="text" id="postycal-sub-field" name="sub_field" class="regular-text">
-                                <p class="description"><?php esc_html_e( 'The name of the date field within the repeater.', 'postycal' ); ?></p>
+                                <select id="postycal-sub-field" name="sub_field">
+                                    <option value=""><?php esc_html_e( 'Select a repeater field first', 'postycal' ); ?></option>
+                                </select>
+                                <p class="description"><?php esc_html_e( 'Select the date field within the repeater.', 'postycal' ); ?></p>
+                                <input type="text" id="postycal-sub-field-manual" name="sub_field_manual" class="regular-text" style="display: none;" placeholder="<?php esc_attr_e( 'Enter sub-field name', 'postycal' ); ?>">
                             </td>
                         </tr>
                         <tr id="postycal-date-logic-row" style="display: none;">
@@ -552,20 +769,27 @@ class Admin {
                                 <p class="description"><?php esc_html_e( 'How to handle multiple dates in the repeater.', 'postycal' ); ?></p>
                             </td>
                         </tr>
-                        <tr>
+                        <tr id="postycal-upcoming-term-row">
                             <th scope="row">
-                                <label for="postycal-upcoming-term"><?php esc_html_e( 'Pre-Date Category Slug', 'postycal' ); ?></label>
+                                <label for="postycal-upcoming-term"><?php esc_html_e( 'Pre-Date Category', 'postycal' ); ?></label>
                             </th>
                             <td>
-                                <input type="text" id="postycal-upcoming-term" name="upcoming_term" class="regular-text" required>
+                                <select id="postycal-upcoming-term" name="upcoming_term" required>
+                                    <option value=""><?php esc_html_e( 'Select Taxonomy first', 'postycal' ); ?></option>
+                                </select>
+                                <span class="spinner" id="postycal-terms-spinner"></span>
+                                <p class="description"><?php esc_html_e( 'Posts will be assigned to this term when their date is in the future.', 'postycal' ); ?></p>
                             </td>
                         </tr>
-                        <tr>
+                        <tr id="postycal-past-term-row">
                             <th scope="row">
-                                <label for="postycal-past-term"><?php esc_html_e( 'Post-Date Category Slug', 'postycal' ); ?></label>
+                                <label for="postycal-past-term"><?php esc_html_e( 'Post-Date Category', 'postycal' ); ?></label>
                             </th>
                             <td>
-                                <input type="text" id="postycal-past-term" name="past_term" class="regular-text" required>
+                                <select id="postycal-past-term" name="past_term" required>
+                                    <option value=""><?php esc_html_e( 'Select Taxonomy first', 'postycal' ); ?></option>
+                                </select>
+                                <p class="description"><?php esc_html_e( 'Posts will be moved to this term after their date has passed.', 'postycal' ); ?></p>
                             </td>
                         </tr>
                         <tr>

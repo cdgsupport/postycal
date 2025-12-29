@@ -193,3 +193,46 @@
     opacity: 0.6;
     pointer-events: none;
 }
+
+/* Spinner */
+.postycal-modal-content .spinner {
+    float: none;
+    margin: 0 0 0 5px;
+    vertical-align: middle;
+}
+
+/* Dynamic select fields */
+.postycal-modal-content select optgroup {
+    font-weight: bold;
+    color: #1d2327;
+}
+
+.postycal-modal-content select option {
+    font-weight: normal;
+    padding: 5px 10px;
+}
+
+/* Manual entry toggle */
+.postycal-manual-entry {
+    margin-top: 10px !important;
+    font-style: normal !important;
+}
+
+.postycal-manual-entry label {
+    cursor: pointer;
+}
+
+.postycal-manual-entry input[type="checkbox"] {
+    margin-right: 5px;
+}
+
+/* Field description updates */
+#postycal-date-field-desc {
+    margin-top: 5px;
+}
+
+/* Disabled select styling */
+.postycal-modal-content select:disabled {
+    background-color: #f0f0f1;
+    cursor: not-allowed;
+}

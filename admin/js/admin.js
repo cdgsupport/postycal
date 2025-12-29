@@ -1,7 +1,8 @@
 /**
  * PostyCal Admin JavaScript
  *
- * Handles schedule management, modal interactions, and AJAX operations.
+ * Handles schedule management, modal interactions, AJAX operations,
+ * and dynamic loading of ACF fields and taxonomy terms.
  *
  * @package PostyCal
  * @since 2.0.0
@@ -25,6 +26,21 @@
         schedules: [],
 
         /**
+         * Cached ACF fields by post type.
+         */
+        fieldsCache: {},
+
+        /**
+         * Cached terms by taxonomy.
+         */
+        termsCache: {},
+
+        /**
+         * Current editing schedule.
+         */
+        editingSchedule: null,
+
+        /**
          * Initialize the admin module.
          */
         init: function() {
@@ -36,35 +52,41 @@
          * Bind event handlers.
          */
         bindEvents: function() {
+            const self = this;
+
             // Modal controls.
-            $( '#postycal-add-schedule' ).on( 'click', this.openAddModal.bind( this ) );
-            $( '#postycal-cancel' ).on( 'click', this.closeModal.bind( this ) );
-            $( '.postycal-modal-backdrop' ).on( 'click', this.closeModal.bind( this ) );
+            $( '#postycal-add-schedule' ).on( 'click', function( e ) { self.openAddModal( e ); } );
+            $( '#postycal-cancel' ).on( 'click', function() { self.closeModal(); } );
+            $( '.postycal-modal-backdrop' ).on( 'click', function() { self.closeModal(); } );
 
             // Form submission.
-            $( '#postycal-schedule-form' ).on( 'submit', this.handleFormSubmit.bind( this ) );
+            $( '#postycal-schedule-form' ).on( 'submit', function( e ) { self.handleFormSubmit( e ); } );
 
-            // Field type toggle.
-            $( '#postycal-field-type' ).on( 'change', this.toggleRepeaterOptions.bind( this ) );
+            // Dynamic field loading.
+            $( '#postycal-post-type' ).on( 'change', function() { self.handlePostTypeChange(); } );
+            $( '#postycal-taxonomy' ).on( 'change', function() { self.handleTaxonomyChange(); } );
+            $( '#postycal-date-field' ).on( 'change', function() { self.handleDateFieldChange(); } );
+
+            // Manual entry toggle.
+            $( '#postycal-manual-field-entry' ).on( 'change', function() { self.toggleManualFieldEntry(); } );
 
             // Trigger cron.
-            $( '#postycal-trigger-cron' ).on( 'click', this.triggerCron.bind( this ) );
+            $( '#postycal-trigger-cron' ).on( 'click', function( e ) { self.triggerCron( e ); } );
 
             // Dynamic event binding for edit/delete.
-            $( document ).on( 'click', '.postycal-edit-schedule', this.openEditModal.bind( this ) );
-            $( document ).on( 'click', '.postycal-delete-schedule', this.handleDelete.bind( this ) );
+            $( document ).on( 'click', '.postycal-edit-schedule', function( e ) { self.openEditModal( e ); } );
+            $( document ).on( 'click', '.postycal-delete-schedule', function( e ) { self.handleDelete( e ); } );
 
             // Escape key to close modal.
-            $( document ).on( 'keydown', this.handleEscapeKey.bind( this ) );
+            $( document ).on( 'keydown', function( e ) { self.handleEscapeKey( e ); } );
         },
 
         /**
          * Open modal for adding new schedule.
-         *
-         * @param {Event} e Click event.
          */
         openAddModal: function( e ) {
             e.preventDefault();
+            this.editingSchedule = null;
             this.resetForm();
             $( '#postycal-modal-title' ).text( this.config.i18n.addSchedule );
             $( '#postycal-schedule-index' ).val( '' );
@@ -74,8 +96,6 @@
 
         /**
          * Open modal for editing existing schedule.
-         *
-         * @param {Event} e Click event.
          */
         openEditModal: function( e ) {
             e.preventDefault();
@@ -86,24 +106,49 @@
                 return;
             }
 
+            const self = this;
+            this.editingSchedule = schedule;
             this.resetForm();
             $( '#postycal-modal-title' ).text( this.config.i18n.editSchedule );
             $( '#postycal-schedule-index' ).val( index );
 
-            // Populate form fields.
+            // Populate basic fields.
             $( '#postycal-name' ).val( schedule.name );
             $( '#postycal-post-type' ).val( schedule.post_type );
             $( '#postycal-taxonomy' ).val( schedule.taxonomy );
-            $( '#postycal-date-field' ).val( schedule.date_field );
-            $( '#postycal-field-type' ).val( schedule.field_type || 'single' );
-            $( '#postycal-sub-field' ).val( schedule.sub_field || '' );
             $( '#postycal-date-logic' ).val( schedule.date_logic || 'earliest' );
-            $( '#postycal-upcoming-term' ).val( schedule.upcoming_term );
-            $( '#postycal-past-term' ).val( schedule.past_term );
             $( '#postycal-use-time' ).prop( 'checked', schedule.use_time || false );
 
-            // Toggle repeater options.
-            this.toggleRepeaterOptions();
+            // Load ACF fields for the post type.
+            this.loadAcfFields( schedule.post_type, function() {
+                const $dateField = $( '#postycal-date-field' );
+                
+                if ( $dateField.find( 'option[value="' + schedule.date_field + '"]' ).length > 0 ) {
+                    $dateField.val( schedule.date_field );
+                    self.handleDateFieldChange();
+                    
+                    if ( schedule.field_type === 'repeater' && schedule.sub_field ) {
+                        $( '#postycal-sub-field' ).val( schedule.sub_field );
+                    }
+                } else {
+                    // Field not found - enable manual entry.
+                    $( '#postycal-manual-field-entry' ).prop( 'checked', true ).trigger( 'change' );
+                    $( '#postycal-date-field-manual' ).val( schedule.date_field );
+                    
+                    if ( schedule.field_type === 'repeater' ) {
+                        $( '#postycal-sub-field-row' ).show();
+                        $( '#postycal-date-logic-row' ).show();
+                        $( '#postycal-sub-field-manual' ).show().val( schedule.sub_field );
+                        $( '#postycal-sub-field' ).hide();
+                    }
+                }
+            } );
+
+            // Load taxonomy terms.
+            this.loadTaxonomyTerms( schedule.taxonomy, function() {
+                $( '#postycal-upcoming-term' ).val( schedule.upcoming_term );
+                $( '#postycal-past-term' ).val( schedule.past_term );
+            } );
 
             $( '#postycal-modal' ).show();
             $( '#postycal-name' ).focus();
@@ -114,13 +159,12 @@
          */
         closeModal: function() {
             $( '#postycal-modal' ).hide();
+            this.editingSchedule = null;
             this.resetForm();
         },
 
         /**
          * Handle escape key press.
-         *
-         * @param {Event} e Keydown event.
          */
         handleEscapeKey: function( e ) {
             if ( e.key === 'Escape' && $( '#postycal-modal' ).is( ':visible' ) ) {
@@ -134,44 +178,307 @@
         resetForm: function() {
             $( '#postycal-schedule-form' )[ 0 ].reset();
             $( '#postycal-schedule-index' ).val( '' );
-            $( '#postycal-field-type' ).val( 'single' );
             $( '#postycal-use-time' ).prop( 'checked', false );
-            this.toggleRepeaterOptions();
+            $( '#postycal-manual-field-entry' ).prop( 'checked', false );
+            
+            // Reset date field dropdown.
+            $( '#postycal-date-field' ).html( '<option value="">' + this.config.i18n.selectPostTypeFirst + '</option>' ).show();
+            $( '#postycal-date-field-manual' ).hide().val( '' );
+            $( '.postycal-manual-entry' ).hide();
+            
+            // Reset sub-field.
+            $( '#postycal-sub-field' ).html( '<option value="">' + this.config.i18n.selectRepeaterFirst + '</option>' ).show();
+            $( '#postycal-sub-field-manual' ).hide().val( '' );
+            $( '#postycal-sub-field-row' ).hide();
+            $( '#postycal-date-logic-row' ).hide();
+            
+            // Reset term dropdowns.
+            $( '#postycal-upcoming-term' ).html( '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>' );
+            $( '#postycal-past-term' ).html( '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>' );
         },
 
         /**
-         * Toggle repeater-specific options.
+         * Handle post type selection change.
          */
-        toggleRepeaterOptions: function() {
-            const isRepeater = $( '#postycal-field-type' ).val() === 'repeater';
-            const $repeaterRow = $( '#postycal-repeater-options' );
-            const $logicRow = $( '#postycal-date-logic-row' );
-            const $subField = $( '#postycal-sub-field' );
+        handlePostTypeChange: function() {
+            const postType = $( '#postycal-post-type' ).val();
+            
+            if ( ! postType ) {
+                $( '#postycal-date-field' ).html( '<option value="">' + this.config.i18n.selectPostTypeFirst + '</option>' );
+                $( '.postycal-manual-entry' ).hide();
+                return;
+            }
 
-            if ( isRepeater ) {
-                $repeaterRow.show();
-                $logicRow.show();
-                $subField.prop( 'required', true );
+            this.loadAcfFields( postType );
+        },
+
+        /**
+         * Load ACF fields for a post type.
+         */
+        loadAcfFields: function( postType, callback ) {
+            const self = this;
+            const $select = $( '#postycal-date-field' );
+            const $spinner = $( '#postycal-fields-spinner' );
+
+            // Check cache first.
+            if ( this.fieldsCache[ postType ] ) {
+                this.populateFieldsDropdown( this.fieldsCache[ postType ] );
+                if ( callback ) callback();
+                return;
+            }
+
+            $select.html( '<option value="">' + this.config.i18n.loading + '</option>' );
+            $spinner.addClass( 'is-active' );
+
+            $.post( this.config.ajaxUrl, {
+                action: 'postycal_get_acf_fields',
+                nonce: this.config.nonce,
+                post_type: postType
+            } )
+            .done( function( response ) {
+                if ( response.success ) {
+                    self.fieldsCache[ postType ] = response.data.fields;
+                    self.populateFieldsDropdown( response.data.fields );
+                } else {
+                    $select.html( '<option value="">' + self.config.i18n.noFieldsFound + '</option>' );
+                }
+                if ( callback ) callback();
+            } )
+            .fail( function() {
+                $select.html( '<option value="">' + self.config.i18n.errorLoadingFields + '</option>' );
+            } )
+            .always( function() {
+                $spinner.removeClass( 'is-active' );
+            } );
+        },
+
+        /**
+         * Populate the fields dropdown.
+         */
+        populateFieldsDropdown: function( fields ) {
+            const self = this;
+            const $select = $( '#postycal-date-field' );
+            let html = '<option value="">' + this.config.i18n.selectDateField + '</option>';
+
+            if ( ! fields || fields.length === 0 ) {
+                html = '<option value="">' + this.config.i18n.noFieldsFound + '</option>';
+                $select.html( html );
+                $( '.postycal-manual-entry' ).show();
+                return;
+            }
+
+            // Group fields by type.
+            const dateFields = fields.filter( function( f ) {
+                return f.type === 'date_picker' || f.type === 'date_time_picker';
+            } );
+            const repeaterFields = fields.filter( function( f ) {
+                return f.type === 'repeater' && f.sub_fields && f.sub_fields.length > 0;
+            } );
+
+            // Add date fields.
+            if ( dateFields.length > 0 ) {
+                html += '<optgroup label="' + this.config.i18n.dateFields + '">';
+                dateFields.forEach( function( field ) {
+                    const typeLabel = field.type === 'date_time_picker' ? ' (DateTime)' : ' (Date)';
+                    html += '<option value="' + self.escapeHtml( field.name ) + '" data-type="single" data-field-type="' + field.type + '">';
+                    html += self.escapeHtml( field.label ) + typeLabel + ' [' + self.escapeHtml( field.group ) + ']';
+                    html += '</option>';
+                } );
+                html += '</optgroup>';
+            }
+
+            // Add repeater fields.
+            if ( repeaterFields.length > 0 ) {
+                html += '<optgroup label="' + this.config.i18n.repeaterFields + '">';
+                repeaterFields.forEach( function( field ) {
+                    html += '<option value="' + self.escapeHtml( field.name ) + '" data-type="repeater" data-subfields=\'' + JSON.stringify( field.sub_fields ) + '\'>';
+                    html += self.escapeHtml( field.label ) + ' (Repeater) [' + self.escapeHtml( field.group ) + ']';
+                    html += '</option>';
+                } );
+                html += '</optgroup>';
+            }
+
+            $select.html( html );
+            $( '.postycal-manual-entry' ).show();
+        },
+
+        /**
+         * Handle date field selection change.
+         */
+        handleDateFieldChange: function() {
+            const $selected = $( '#postycal-date-field option:selected' );
+            const fieldType = $selected.data( 'type' );
+            const acfFieldType = $selected.data( 'field-type' );
+            
+            // Auto-check use_time for datetime fields.
+            if ( acfFieldType === 'date_time_picker' ) {
+                $( '#postycal-use-time' ).prop( 'checked', true );
+            }
+
+            if ( fieldType === 'repeater' ) {
+                $( '#postycal-sub-field-row' ).show();
+                $( '#postycal-date-logic-row' ).show();
+                const subFields = $selected.data( 'subfields' );
+                this.populateSubFieldsDropdown( subFields );
             } else {
-                $repeaterRow.hide();
-                $logicRow.hide();
-                $subField.prop( 'required', false );
+                $( '#postycal-sub-field-row' ).hide();
+                $( '#postycal-date-logic-row' ).hide();
             }
         },
 
         /**
+         * Populate the sub-fields dropdown for repeaters.
+         */
+        populateSubFieldsDropdown: function( subFields ) {
+            const self = this;
+            const $select = $( '#postycal-sub-field' );
+            let html = '<option value="">' + this.config.i18n.selectSubField + '</option>';
+
+            if ( subFields && subFields.length > 0 ) {
+                subFields.forEach( function( field ) {
+                    const typeLabel = field.type === 'date_time_picker' ? ' (DateTime)' : ' (Date)';
+                    html += '<option value="' + self.escapeHtml( field.name ) + '" data-field-type="' + field.type + '">';
+                    html += self.escapeHtml( field.label ) + typeLabel;
+                    html += '</option>';
+                } );
+            }
+
+            $select.html( html );
+        },
+
+        /**
+         * Toggle manual field entry mode.
+         */
+        toggleManualFieldEntry: function() {
+            const isManual = $( '#postycal-manual-field-entry' ).is( ':checked' );
+            
+            if ( isManual ) {
+                $( '#postycal-date-field' ).hide();
+                $( '#postycal-date-field-manual' ).show();
+                $( '#postycal-sub-field' ).hide();
+                $( '#postycal-sub-field-manual' ).show();
+                $( '#postycal-sub-field-row' ).show();
+                $( '#postycal-date-logic-row' ).show();
+            } else {
+                $( '#postycal-date-field' ).show();
+                $( '#postycal-date-field-manual' ).hide();
+                $( '#postycal-sub-field' ).show();
+                $( '#postycal-sub-field-manual' ).hide();
+                this.handleDateFieldChange();
+            }
+        },
+
+        /**
+         * Handle taxonomy selection change.
+         */
+        handleTaxonomyChange: function() {
+            const taxonomy = $( '#postycal-taxonomy' ).val();
+            
+            if ( ! taxonomy ) {
+                $( '#postycal-upcoming-term' ).html( '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>' );
+                $( '#postycal-past-term' ).html( '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>' );
+                return;
+            }
+
+            this.loadTaxonomyTerms( taxonomy );
+        },
+
+        /**
+         * Load terms for a taxonomy.
+         */
+        loadTaxonomyTerms: function( taxonomy, callback ) {
+            const self = this;
+            const $upcomingSelect = $( '#postycal-upcoming-term' );
+            const $pastSelect = $( '#postycal-past-term' );
+            const $spinner = $( '#postycal-terms-spinner' );
+
+            // Check cache first.
+            if ( this.termsCache[ taxonomy ] ) {
+                this.populateTermsDropdowns( this.termsCache[ taxonomy ] );
+                if ( callback ) callback();
+                return;
+            }
+
+            $upcomingSelect.html( '<option value="">' + this.config.i18n.loading + '</option>' );
+            $pastSelect.html( '<option value="">' + this.config.i18n.loading + '</option>' );
+            $spinner.addClass( 'is-active' );
+
+            $.post( this.config.ajaxUrl, {
+                action: 'postycal_get_taxonomy_terms',
+                nonce: this.config.nonce,
+                taxonomy: taxonomy
+            } )
+            .done( function( response ) {
+                if ( response.success ) {
+                    self.termsCache[ taxonomy ] = response.data.terms;
+                    self.populateTermsDropdowns( response.data.terms );
+                } else {
+                    const errorHtml = '<option value="">' + self.config.i18n.noTermsFound + '</option>';
+                    $upcomingSelect.html( errorHtml );
+                    $pastSelect.html( errorHtml );
+                }
+                if ( callback ) callback();
+            } )
+            .fail( function() {
+                const errorHtml = '<option value="">' + self.config.i18n.errorLoadingTerms + '</option>';
+                $upcomingSelect.html( errorHtml );
+                $pastSelect.html( errorHtml );
+            } )
+            .always( function() {
+                $spinner.removeClass( 'is-active' );
+            } );
+        },
+
+        /**
+         * Populate term dropdowns.
+         */
+        populateTermsDropdowns: function( terms ) {
+            const self = this;
+            const $upcomingSelect = $( '#postycal-upcoming-term' );
+            const $pastSelect = $( '#postycal-past-term' );
+            
+            let html = '<option value="">' + this.config.i18n.selectTerm + '</option>';
+
+            if ( ! terms || terms.length === 0 ) {
+                html = '<option value="">' + this.config.i18n.noTermsFound + '</option>';
+            } else {
+                terms.forEach( function( term ) {
+                    html += '<option value="' + self.escapeHtml( term.slug ) + '">';
+                    html += self.escapeHtml( term.name ) + ' (' + self.escapeHtml( term.slug ) + ')';
+                    html += '</option>';
+                } );
+            }
+
+            $upcomingSelect.html( html );
+            $pastSelect.html( html );
+        },
+
+        /**
          * Handle form submission.
-         *
-         * @param {Event} e Submit event.
          */
         handleFormSubmit: function( e ) {
             e.preventDefault();
 
+            const self = this;
             const $form = $( '#postycal-schedule-form' );
             const $submitBtn = $form.find( 'button[type="submit"]' );
             const originalText = $submitBtn.text();
 
             $submitBtn.prop( 'disabled', true ).text( this.config.i18n.processing );
+
+            // Determine field values based on manual entry mode.
+            const isManual = $( '#postycal-manual-field-entry' ).is( ':checked' );
+            const dateField = isManual ? $( '#postycal-date-field-manual' ).val() : $( '#postycal-date-field' ).val();
+            const subField = isManual ? $( '#postycal-sub-field-manual' ).val() : $( '#postycal-sub-field' ).val();
+            
+            // Determine field type.
+            let fieldType = 'single';
+            if ( isManual ) {
+                fieldType = subField ? 'repeater' : 'single';
+            } else {
+                const $selectedField = $( '#postycal-date-field option:selected' );
+                fieldType = $selectedField.data( 'type' ) || 'single';
+            }
 
             const data = {
                 action: 'postycal_save_schedule',
@@ -180,9 +487,9 @@
                 name: $( '#postycal-name' ).val(),
                 post_type: $( '#postycal-post-type' ).val(),
                 taxonomy: $( '#postycal-taxonomy' ).val(),
-                date_field: $( '#postycal-date-field' ).val(),
-                field_type: $( '#postycal-field-type' ).val(),
-                sub_field: $( '#postycal-sub-field' ).val(),
+                date_field: dateField,
+                field_type: fieldType,
+                sub_field: subField,
                 date_logic: $( '#postycal-date-logic' ).val(),
                 upcoming_term: $( '#postycal-upcoming-term' ).val(),
                 past_term: $( '#postycal-past-term' ).val(),
@@ -190,28 +497,26 @@
             };
 
             $.post( this.config.ajaxUrl, data )
-                .done( ( response ) => {
+                .done( function( response ) {
                     if ( response.success ) {
-                        this.schedules = response.data.schedules;
-                        this.refreshTable();
-                        this.closeModal();
-                        this.showNotice( 'success', response.data.message );
+                        self.schedules = response.data.schedules;
+                        self.refreshTable();
+                        self.closeModal();
+                        self.showNotice( 'success', response.data.message );
                     } else {
-                        this.showNotice( 'error', response.data.message || this.config.i18n.saveError );
+                        self.showNotice( 'error', response.data.message || self.config.i18n.saveError );
                     }
                 } )
-                .fail( () => {
-                    this.showNotice( 'error', this.config.i18n.saveError );
+                .fail( function() {
+                    self.showNotice( 'error', self.config.i18n.saveError );
                 } )
-                .always( () => {
+                .always( function() {
                     $submitBtn.prop( 'disabled', false ).text( originalText );
                 } );
         },
 
         /**
          * Handle schedule deletion.
-         *
-         * @param {Event} e Click event.
          */
         handleDelete: function( e ) {
             e.preventDefault();
@@ -220,87 +525,85 @@
                 return;
             }
 
+            const self = this;
             const $btn = $( e.currentTarget );
             const index = $btn.data( 'index' );
             const originalText = $btn.text();
 
             $btn.prop( 'disabled', true ).text( this.config.i18n.processing );
 
-            const data = {
+            $.post( this.config.ajaxUrl, {
                 action: 'postycal_delete_schedule',
                 nonce: this.config.nonce,
                 index: index
-            };
-
-            $.post( this.config.ajaxUrl, data )
-                .done( ( response ) => {
-                    if ( response.success ) {
-                        this.schedules = response.data.schedules;
-                        this.refreshTable();
-                        this.showNotice( 'success', response.data.message );
-                    } else {
-                        this.showNotice( 'error', response.data.message || this.config.i18n.deleteError );
-                    }
-                } )
-                .fail( () => {
-                    this.showNotice( 'error', this.config.i18n.deleteError );
-                } )
-                .always( () => {
-                    $btn.prop( 'disabled', false ).text( originalText );
-                } );
+            } )
+            .done( function( response ) {
+                if ( response.success ) {
+                    self.schedules = response.data.schedules;
+                    self.refreshTable();
+                    self.showNotice( 'success', response.data.message );
+                } else {
+                    self.showNotice( 'error', response.data.message || self.config.i18n.deleteError );
+                }
+            } )
+            .fail( function() {
+                self.showNotice( 'error', self.config.i18n.deleteError );
+            } )
+            .always( function() {
+                $btn.prop( 'disabled', false ).text( originalText );
+            } );
         },
 
         /**
          * Trigger manual cron run.
-         *
-         * @param {Event} e Click event.
          */
         triggerCron: function( e ) {
             e.preventDefault();
 
+            const self = this;
             const $btn = $( e.currentTarget );
             const originalText = $btn.text();
 
             $btn.prop( 'disabled', true ).text( this.config.i18n.processing );
 
-            const data = {
+            $.post( this.config.ajaxUrl, {
                 action: 'postycal_trigger_cron',
                 nonce: this.config.nonce
-            };
+            } )
+            .done( function( response ) {
+                if ( response.success ) {
+                    let message = response.data.message;
 
-            $.post( this.config.ajaxUrl, data )
-                .done( ( response ) => {
-                    if ( response.success ) {
-                        let message = response.data.message;
-
-                        // Add results summary if available.
-                        if ( response.data.results ) {
-                            const results = response.data.results;
-                            const summary = Object.entries( results )
-                                .map( ( [ name, count ] ) => name + ': ' + count + ' transitioned' )
-                                .join( ', ' );
-                            if ( summary ) {
-                                message += ' (' + summary + ')';
-                            }
+                    if ( response.data.results ) {
+                        const results = response.data.results;
+                        const summary = Object.entries( results )
+                            .map( function( entry ) {
+                                return entry[0] + ': ' + entry[1] + ' transitioned';
+                            } )
+                            .join( ', ' );
+                        if ( summary ) {
+                            message += ' (' + summary + ')';
                         }
-
-                        this.showNotice( 'success', message );
-                    } else {
-                        this.showNotice( 'error', response.data.message || this.config.i18n.triggerError );
                     }
-                } )
-                .fail( () => {
-                    this.showNotice( 'error', this.config.i18n.triggerError );
-                } )
-                .always( () => {
-                    $btn.prop( 'disabled', false ).text( originalText );
-                } );
+
+                    self.showNotice( 'success', message );
+                } else {
+                    self.showNotice( 'error', response.data.message || self.config.i18n.triggerError );
+                }
+            } )
+            .fail( function() {
+                self.showNotice( 'error', self.config.i18n.triggerError );
+            } )
+            .always( function() {
+                $btn.prop( 'disabled', false ).text( originalText );
+            } );
         },
 
         /**
          * Refresh the schedules table.
          */
         refreshTable: function() {
+            const self = this;
             const $tbody = $( '#postycal-schedules-table tbody' );
             $tbody.empty();
 
@@ -316,25 +619,24 @@
 
             $( '#postycal-trigger-cron' ).show();
 
-            this.schedules.forEach( ( schedule, index ) => {
+            this.schedules.forEach( function( schedule, index ) {
                 let fieldTypeLabel = schedule.field_type === 'repeater'
                     ? 'Repeater (' + ( schedule.date_logic || 'earliest' ) + ')'
                     : 'Single';
 
-                // Add time indicator if enabled.
                 if ( schedule.use_time ) {
                     fieldTypeLabel += ' + Time';
                 }
 
                 const row =
                     '<tr data-index="' + index + '">' +
-                        '<td>' + this.escapeHtml( schedule.name ) + '</td>' +
-                        '<td>' + this.escapeHtml( schedule.post_type ) + '</td>' +
-                        '<td>' + this.escapeHtml( schedule.taxonomy ) + '</td>' +
-                        '<td>' + this.escapeHtml( schedule.date_field ) + '</td>' +
-                        '<td>' + this.escapeHtml( fieldTypeLabel ) + '</td>' +
-                        '<td>' + this.escapeHtml( schedule.upcoming_term ) + '</td>' +
-                        '<td>' + this.escapeHtml( schedule.past_term ) + '</td>' +
+                        '<td>' + self.escapeHtml( schedule.name ) + '</td>' +
+                        '<td>' + self.escapeHtml( schedule.post_type ) + '</td>' +
+                        '<td>' + self.escapeHtml( schedule.taxonomy ) + '</td>' +
+                        '<td>' + self.escapeHtml( schedule.date_field ) + '</td>' +
+                        '<td>' + self.escapeHtml( fieldTypeLabel ) + '</td>' +
+                        '<td>' + self.escapeHtml( schedule.upcoming_term ) + '</td>' +
+                        '<td>' + self.escapeHtml( schedule.past_term ) + '</td>' +
                         '<td>' +
                             '<button type="button" class="button postycal-edit-schedule" data-index="' + index + '">' +
                                 'Edit' +
@@ -350,12 +652,8 @@
 
         /**
          * Show admin notice.
-         *
-         * @param {string} type    Notice type (success, error, warning).
-         * @param {string} message Notice message.
          */
         showNotice: function( type, message ) {
-            // Remove any existing notices.
             $( '.postycal-notice' ).remove();
 
             const notice =
@@ -368,14 +666,12 @@
 
             $( '.wrap.postycal-settings h1' ).after( notice );
 
-            // Auto-dismiss after 5 seconds.
             setTimeout( function() {
                 $( '.postycal-notice' ).fadeOut( 300, function() {
                     $( this ).remove();
                 } );
             }, 5000 );
 
-            // Handle dismiss button click.
             $( '.postycal-notice .notice-dismiss' ).on( 'click', function() {
                 $( this ).closest( '.postycal-notice' ).fadeOut( 300, function() {
                     $( this ).remove();
@@ -385,14 +681,9 @@
 
         /**
          * Escape HTML entities.
-         *
-         * @param {string} str String to escape.
-         * @return {string} Escaped string.
          */
         escapeHtml: function( str ) {
-            if ( ! str ) {
-                return '';
-            }
+            if ( ! str ) return '';
             const div = document.createElement( 'div' );
             div.appendChild( document.createTextNode( str ) );
             return div.innerHTML;
