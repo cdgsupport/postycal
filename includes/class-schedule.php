@@ -32,60 +32,49 @@ class Schedule {
     public readonly string $post_type;
 
     /**
-     * Taxonomy for category assignment.
+     * Taxonomy for term assignment.
      *
      * @var string
      */
     public readonly string $taxonomy;
 
     /**
-     * ACF date field name.
-     *
-     * @var string
-     */
-    public readonly string $date_field;
-
-    /**
-     * Field type: 'single' or 'repeater'.
-     *
-     * @var string
-     */
-    public readonly string $field_type;
-
-    /**
-     * Sub-field name for repeater fields.
-     *
-     * @var string
-     */
-    public readonly string $sub_field;
-
-    /**
-     * Date logic for repeaters: 'earliest', 'latest', or 'any_past'.
-     *
-     * @var string
-     */
-    public readonly string $date_logic;
-
-    /**
-     * Pre-date (upcoming) term slug.
+     * Term slug assigned before the go-live date.
      *
      * @var string
      */
     public readonly string $upcoming_term;
 
     /**
-     * Post-date (past) term slug.
+     * Term slug assigned between go-live and expiration dates.
+     *
+     * @var string
+     */
+    public readonly string $active_term;
+
+    /**
+     * Term slug assigned after the expiration date.
      *
      * @var string
      */
     public readonly string $past_term;
 
     /**
-     * Whether to use time component for transitions.
+     * Whether to compare datetimes (true) or date-only (false).
      *
      * @var bool
      */
     public readonly bool $use_time;
+
+    /**
+     * Stable unique key used to derive post meta keys.
+     *
+     * Generated once on schedule creation and preserved across updates
+     * so that meta keys remain stable if the schedule name changes.
+     *
+     * @var string
+     */
+    public readonly string $schedule_key;
 
     /**
      * Constructor.
@@ -96,52 +85,53 @@ class Schedule {
         $this->name          = sanitize_text_field( $data['name'] ?? '' );
         $this->post_type     = sanitize_key( $data['post_type'] ?? '' );
         $this->taxonomy      = sanitize_key( $data['taxonomy'] ?? '' );
-        $this->date_field    = sanitize_text_field( $data['date_field'] ?? '' );
-        $this->field_type    = $this->validate_field_type( $data['field_type'] ?? 'single' );
-        $this->sub_field     = sanitize_text_field( $data['sub_field'] ?? '' );
-        $this->date_logic    = $this->validate_date_logic( $data['date_logic'] ?? 'earliest' );
-        $this->upcoming_term = sanitize_text_field( $data['upcoming_term'] ?? '' );
-        $this->past_term     = sanitize_text_field( $data['past_term'] ?? '' );
+        $this->upcoming_term = sanitize_title( $data['upcoming_term'] ?? '' );
+        $this->active_term   = sanitize_title( $data['active_term'] ?? '' );
+        $this->past_term     = sanitize_title( $data['past_term'] ?? '' );
         $this->use_time      = (bool) ( $data['use_time'] ?? false );
+        $this->schedule_key  = ! empty( $data['schedule_key'] )
+            ? sanitize_key( $data['schedule_key'] )
+            : $this->generate_key();
     }
 
     /**
-     * Validate field type.
+     * Generate a stable unique key for this schedule.
      *
-     * @param string $type The field type.
-     * @return string Valid field type.
+     * @return string
      */
-    private function validate_field_type( string $type ): string {
-        $valid_types = [ 'single', 'repeater' ];
-        return in_array( $type, $valid_types, true ) ? $type : 'single';
+    private function generate_key(): string {
+        return 'pc_' . substr( md5( uniqid( '', true ) ), 0, 8 );
     }
 
     /**
-     * Validate date logic.
+     * Get the post meta key for the go-live date.
      *
-     * @param string $logic The date logic.
-     * @return string Valid date logic.
+     * @return string
      */
-    private function validate_date_logic( string $logic ): string {
-        $valid_logic = [ 'earliest', 'latest', 'any_past' ];
-        return in_array( $logic, $valid_logic, true ) ? $logic : 'earliest';
+    public function get_go_live_meta_key(): string {
+        return '_postycal_' . $this->schedule_key . '_go_live';
     }
 
     /**
-     * Check if schedule is valid.
+     * Get the post meta key for the expiration date.
      *
-     * @return bool True if valid, false otherwise.
+     * @return string
+     */
+    public function get_expiration_meta_key(): string {
+        return '_postycal_' . $this->schedule_key . '_expiration';
+    }
+
+    /**
+     * Check if schedule configuration is complete.
+     *
+     * @return bool True if all required fields are present.
      */
     public function is_valid(): bool {
         if ( empty( $this->name ) || empty( $this->post_type ) || empty( $this->taxonomy ) ) {
             return false;
         }
 
-        if ( empty( $this->date_field ) || empty( $this->upcoming_term ) || empty( $this->past_term ) ) {
-            return false;
-        }
-
-        if ( 'repeater' === $this->field_type && empty( $this->sub_field ) ) {
+        if ( empty( $this->upcoming_term ) || empty( $this->active_term ) || empty( $this->past_term ) ) {
             return false;
         }
 
@@ -149,71 +139,61 @@ class Schedule {
     }
 
     /**
-     * Validate that referenced post type exists.
+     * Validate that the referenced post type is registered.
      *
-     * @return bool True if post type exists.
+     * @return bool
      */
     public function post_type_exists(): bool {
         return post_type_exists( $this->post_type );
     }
 
     /**
-     * Validate that referenced taxonomy exists.
+     * Validate that the referenced taxonomy is registered.
      *
-     * @return bool True if taxonomy exists.
+     * @return bool
      */
     public function taxonomy_exists(): bool {
         return taxonomy_exists( $this->taxonomy );
     }
 
     /**
-     * Validate that terms exist in the taxonomy.
+     * Validate that all three terms exist in the taxonomy.
      *
-     * @return array<string, bool> Array with 'upcoming' and 'past' keys.
+     * @return array<string, bool> Keys: upcoming, active, past.
      */
     public function terms_exist(): array {
         return [
             'upcoming' => term_exists( $this->upcoming_term, $this->taxonomy ) !== null,
+            'active'   => term_exists( $this->active_term, $this->taxonomy ) !== null,
             'past'     => term_exists( $this->past_term, $this->taxonomy ) !== null,
         ];
     }
 
     /**
-     * Convert schedule to array.
+     * Convert schedule to a plain array for storage.
      *
-     * @return array<string, string> Schedule data array.
+     * @return array<string, string|bool>
      */
     public function to_array(): array {
         return [
             'name'          => $this->name,
             'post_type'     => $this->post_type,
             'taxonomy'      => $this->taxonomy,
-            'date_field'    => $this->date_field,
-            'field_type'    => $this->field_type,
-            'sub_field'     => $this->sub_field,
-            'date_logic'    => $this->date_logic,
             'upcoming_term' => $this->upcoming_term,
+            'active_term'   => $this->active_term,
             'past_term'     => $this->past_term,
             'use_time'      => $this->use_time,
+            'schedule_key'  => $this->schedule_key,
         ];
     }
 
     /**
-     * Check if this schedule matches a post type.
+     * Check if this schedule applies to a post type.
      *
-     * @param string $post_type The post type to check.
-     * @return bool True if matches.
+     * @param string $post_type Post type slug.
+     * @return bool
      */
     public function matches_post_type( string $post_type ): bool {
         return $this->post_type === $post_type;
-    }
-
-    /**
-     * Is this a repeater field schedule?
-     *
-     * @return bool True if repeater.
-     */
-    public function is_repeater(): bool {
-        return 'repeater' === $this->field_type;
     }
 }

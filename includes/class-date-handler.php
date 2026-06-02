@@ -2,7 +2,7 @@
 /**
  * Date Handler Class
  *
- * Handles date parsing, comparison, and transition logic.
+ * Handles date parsing, comparison, and retrieval from post meta.
  *
  * @package PostyCal
  * @since 2.0.0
@@ -21,44 +21,14 @@ use DateTimeZone;
 class Date_Handler {
 
     /**
-     * Get the relevant date from a post based on schedule settings.
+     * Get the go-live date for a post from its meta field.
      *
      * @param int      $post_id  The post ID.
      * @param Schedule $schedule The schedule configuration.
-     * @return DateTimeImmutable|null The parsed date or null if not found.
+     * @return DateTimeImmutable|null Parsed date, or null if not set.
      */
-    public static function get_post_date( int $post_id, Schedule $schedule ): ?DateTimeImmutable {
-        if ( ! function_exists( 'get_field' ) ) {
-            Logger::debug( 'ACF get_field not available', [ 'post_id' => $post_id ] );
-            return null;
-        }
-
-        if ( $schedule->is_repeater() ) {
-            return self::get_repeater_date( $post_id, $schedule );
-        }
-
-        return self::get_single_date( $post_id, $schedule->date_field );
-    }
-
-    /**
-     * Get date from a single ACF field.
-     *
-     * @param int    $post_id    The post ID.
-     * @param string $field_name The field name.
-     * @return DateTimeImmutable|null The parsed date or null.
-     */
-    private static function get_single_date( int $post_id, string $field_name ): ?DateTimeImmutable {
-        $value = get_field( $field_name, $post_id );
-
-        Logger::debug(
-            'Retrieved ACF field value',
-            [
-                'post_id'    => $post_id,
-                'field_name' => $field_name,
-                'value'      => $value,
-                'type'       => gettype( $value ),
-            ]
-        );
+    public static function get_go_live_date( int $post_id, Schedule $schedule ): ?DateTimeImmutable {
+        $value = get_post_meta( $post_id, $schedule->get_go_live_meta_key(), true );
 
         if ( empty( $value ) ) {
             return null;
@@ -68,82 +38,33 @@ class Date_Handler {
     }
 
     /**
-     * Get date from an ACF repeater field.
+     * Get the expiration date for a post from its meta field.
      *
      * @param int      $post_id  The post ID.
      * @param Schedule $schedule The schedule configuration.
-     * @return DateTimeImmutable|null The relevant date based on date_logic.
+     * @return DateTimeImmutable|null Parsed date, or null if not set.
      */
-    private static function get_repeater_date( int $post_id, Schedule $schedule ): ?DateTimeImmutable {
-        $repeater = get_field( $schedule->date_field, $post_id );
+    public static function get_expiration_date( int $post_id, Schedule $schedule ): ?DateTimeImmutable {
+        $value = get_post_meta( $post_id, $schedule->get_expiration_meta_key(), true );
 
-        if ( ! is_array( $repeater ) || empty( $repeater ) ) {
+        if ( empty( $value ) ) {
             return null;
         }
 
-        $dates = [];
-        foreach ( $repeater as $row ) {
-            if ( isset( $row[ $schedule->sub_field ] ) && ! empty( $row[ $schedule->sub_field ] ) ) {
-                $date = self::parse_date( $row[ $schedule->sub_field ] );
-                if ( null !== $date ) {
-                    $dates[] = $date;
-                }
-            }
-        }
-
-        if ( empty( $dates ) ) {
-            return null;
-        }
-
-        return self::select_date_by_logic( $dates, $schedule->date_logic );
-    }
-
-    /**
-     * Select a date based on the configured logic.
-     *
-     * @param array<DateTimeImmutable> $dates      Array of dates.
-     * @param string                   $date_logic The selection logic.
-     * @return DateTimeImmutable|null The selected date.
-     */
-    private static function select_date_by_logic( array $dates, string $date_logic ): ?DateTimeImmutable {
-        if ( empty( $dates ) ) {
-            return null;
-        }
-
-        $now = self::get_current_date();
-
-        switch ( $date_logic ) {
-            case 'latest':
-                return self::get_latest_date( $dates );
-
-            case 'any_past':
-                // Check if any date has passed.
-                foreach ( $dates as $date ) {
-                    if ( self::is_date_past( $date, $now ) ) {
-                        return $date;
-                    }
-                }
-                // If no past dates, return earliest future date.
-                return self::get_earliest_date( $dates );
-
-            case 'earliest':
-            default:
-                return self::get_earliest_date( $dates );
-        }
+        return self::parse_date( $value );
     }
 
     /**
      * Parse a date string into a DateTimeImmutable object.
      *
-     * Handles various ACF date formats including:
-     * - Ymd (20250115) - ACF Date Picker default save format
-     * - Y-m-d (2025-01-15) - Standard date
-     * - Y-m-d H:i:s (2025-01-15 14:30:00) - ACF Date/Time Picker 24hr
-     * - d/m/Y g:i a (29/12/2025 11:24 am) - ACF Date/Time Picker 12hr
-     * - And many other common formats
+     * Handles the formats produced by HTML date/datetime-local inputs:
+     *   - Y-m-d         (date input:          2025-12-25)
+     *   - Y-m-d\TH:i    (datetime-local input: 2025-12-25T14:30)
+     *   - Y-m-d H:i:s   (MySQL datetime)
+     *   - Y-m-d H:i     (MySQL without seconds)
      *
-     * @param mixed $value The date value (string or other format).
-     * @return DateTimeImmutable|null The parsed date or null.
+     * @param mixed $value Raw meta value.
+     * @return DateTimeImmutable|null
      */
     public static function parse_date( mixed $value ): ?DateTimeImmutable {
         if ( empty( $value ) ) {
@@ -159,125 +80,62 @@ class Date_Handler {
         }
 
         if ( ! is_string( $value ) ) {
-            Logger::debug( 'Date value is not a string', [ 'type' => gettype( $value ) ] );
             return null;
         }
 
         $timezone = self::get_timezone();
+        $value    = trim( $value );
 
-        // Normalize am/pm variations (AM, PM, a.m., p.m., etc.)
-        $normalized_value = trim( $value );
-        $normalized_value = preg_replace( '/\s+/', ' ', $normalized_value ); // Normalize whitespace
-        $normalized_value = preg_replace( '/a\.?\s*m\.?/i', 'am', $normalized_value );
-        $normalized_value = preg_replace( '/p\.?\s*m\.?/i', 'pm', $normalized_value );
-
-        // Try ACF's common formats first - ORDER MATTERS (most specific first).
-        $acf_formats = [
-            // 12-hour formats with am/pm (most specific first).
-            'd/m/Y g:i a',   // 29/12/2025 11:24 am - ACF Date/Time 12hr European
-            'd/m/Y g:i:s a', // 29/12/2025 11:24:00 am
-            'm/d/Y g:i a',   // 12/29/2025 11:24 am - US format
-            'm/d/Y g:i:s a', // 12/29/2025 11:24:00 am
-            'Y-m-d g:i a',   // 2025-12-29 11:24 am
-            'Y-m-d g:i:s a', // 2025-12-29 11:24:00 am
-            'd-m-Y g:i a',   // 29-12-2025 11:24 am
-            'Y/m/d g:i a',   // 2025/12/29 11:24 am
-            'F j, Y g:i a',  // January 15, 2025 2:30 pm
-            'j F Y g:i a',   // 15 January 2025 2:30 pm
-            
-            // 24-hour datetime formats.
-            'Y-m-d H:i:s',   // 2025-01-15 14:30:00 - Standard MySQL/ACF
-            'Y-m-d H:i',     // 2025-01-15 14:30
-            'd/m/Y H:i:s',   // 15/01/2025 14:30:00
-            'd/m/Y H:i',     // 15/01/2025 14:30
-            'm/d/Y H:i:s',   // 01/15/2025 14:30:00
-            'm/d/Y H:i',     // 01/15/2025 14:30
-            'd-m-Y H:i:s',   // 15-01-2025 14:30:00
-            'd-m-Y H:i',     // 15-01-2025 14:30
-            'Y/m/d H:i:s',   // 2025/01/15 14:30:00
-            'Y/m/d H:i',     // 2025/01/15 14:30
-            'Ymd H:i:s',     // 20250115 14:30:00
-            
-            // Date-only formats.
-            'Ymd',           // 20250115 - ACF Date Picker default save
-            'Y-m-d',         // 2025-01-15 - Standard date
-            'd/m/Y',         // 15/01/2025 - European
-            'm/d/Y',         // 01/15/2025 - US
-            'd-m-Y',         // 15-01-2025 - European with dashes
-            'm-d-Y',         // 01-15-2025 - US with dashes
-            'Y/m/d',         // 2025/01/15
-            
-            // Long formats.
-            'F j, Y',        // January 15, 2025
-            'j F Y',         // 15 January 2025
+        $formats = [
+            'Y-m-d\TH:i:s', // datetime-local with seconds
+            'Y-m-d\TH:i',   // datetime-local (HTML input native format)
+            'Y-m-d H:i:s',  // MySQL datetime
+            'Y-m-d H:i',    // MySQL without seconds
+            'Y-m-d',        // date input (HTML input native format)
         ];
 
-        foreach ( $acf_formats as $format ) {
-            $date = DateTimeImmutable::createFromFormat( $format, $normalized_value, $timezone );
-            
-            if ( false !== $date ) {
-                // Verify the date is valid (createFromFormat can create invalid dates).
-                $errors = DateTimeImmutable::getLastErrors();
-                if ( false === $errors || ( 0 === $errors['warning_count'] && 0 === $errors['error_count'] ) ) {
-                    Logger::debug(
-                        'Parsed date successfully',
-                        [
-                            'original'   => $value,
-                            'normalized' => $normalized_value,
-                            'format'     => $format,
-                            'result'     => $date->format( 'Y-m-d H:i:s' ),
-                        ]
-                    );
-                    return $date;
-                }
+        foreach ( $formats as $format ) {
+            $date   = DateTimeImmutable::createFromFormat( $format, $value, $timezone );
+            $errors = DateTimeImmutable::getLastErrors();
+
+            if ( false !== $date && ( false === $errors || ( 0 === $errors['warning_count'] && 0 === $errors['error_count'] ) ) ) {
+                return $date;
             }
         }
 
-        // Fallback: try PHP's natural parsing (strtotime-based).
+        // Natural-language fallback (handles ISO 8601 and similar).
         try {
-            $date = new DateTimeImmutable( $normalized_value, $timezone );
-            Logger::debug(
-                'Parsed date with natural parsing',
-                [
-                    'value'  => $value,
-                    'result' => $date->format( 'Y-m-d H:i:s' ),
-                ]
-            );
-            return $date;
+            return new DateTimeImmutable( $value, $timezone );
         } catch ( \Exception $e ) {
-            Logger::warning(
-                'Failed to parse date',
-                [
-                    'value' => $value,
-                    'error' => $e->getMessage(),
-                ]
-            );
+            Logger::warning( 'Failed to parse date', [ 'value' => $value, 'error' => $e->getMessage() ] );
             return null;
         }
     }
 
     /**
-     * Get the current date (start of day).
+     * Get the current date at midnight in the site timezone.
      *
-     * @return DateTimeImmutable Current date at midnight.
+     * @return DateTimeImmutable
      */
     public static function get_current_date(): DateTimeImmutable {
         return new DateTimeImmutable( 'today', self::get_timezone() );
     }
 
     /**
-     * Get the current datetime.
+     * Get the current datetime in the site timezone.
      *
-     * @return DateTimeImmutable Current datetime.
+     * @return DateTimeImmutable
      */
     public static function get_current_datetime(): DateTimeImmutable {
         return new DateTimeImmutable( 'now', self::get_timezone() );
     }
 
     /**
-     * Get WordPress timezone.
+     * Get the WordPress site timezone.
      *
-     * @return DateTimeZone The site timezone.
+     * Falls back to a UTC-offset timezone when no named timezone is configured.
+     *
+     * @return DateTimeZone
      */
     public static function get_timezone(): DateTimeZone {
         $timezone_string = get_option( 'timezone_string' );
@@ -286,24 +144,24 @@ class Date_Handler {
             return new DateTimeZone( $timezone_string );
         }
 
-        // Fall back to UTC offset.
         $offset  = (float) get_option( 'gmt_offset', 0 );
         $hours   = (int) $offset;
-        $minutes = ( $offset - $hours ) * 60;
+        $minutes = (int) round( abs( $offset - $hours ) * 60 );
+        $sign    = $offset >= 0 ? '+' : '-';
 
-        $sign   = $offset >= 0 ? '+' : '-';
-        $offset = sprintf( '%s%02d:%02d', $sign, abs( $hours ), abs( $minutes ) );
-
-        return new DateTimeZone( $offset );
+        return new DateTimeZone( sprintf( '%s%02d:%02d', $sign, abs( $hours ), $minutes ) );
     }
 
     /**
-     * Check if a date is in the past.
+     * Check whether a date is in the past relative to now.
      *
-     * @param DateTimeImmutable $date     The date to check.
-     * @param DateTimeImmutable|null $now The reference date (defaults to now).
-     * @param bool              $use_time Whether to compare times or just dates.
-     * @return bool True if date is past.
+     * When $use_time is false, only the calendar date is compared (time ignored).
+     * When $use_time is true, the full datetime is compared.
+     *
+     * @param DateTimeImmutable      $date     The date to check.
+     * @param DateTimeImmutable|null $now      Reference point (defaults to current time/date).
+     * @param bool                   $use_time Compare full datetime (true) or date only (false).
+     * @return bool True if the date is strictly before now.
      */
     public static function is_date_past( DateTimeImmutable $date, ?DateTimeImmutable $now = null, bool $use_time = false ): bool {
         if ( $use_time ) {
@@ -311,10 +169,7 @@ class Date_Handler {
             return $date < $now;
         }
 
-        // Date-only comparison.
-        $now = $now ?? self::get_current_date();
-
-        // Compare just the date portions (ignore time).
+        $now        = $now ?? self::get_current_date();
         $date_start = $date->setTime( 0, 0, 0 );
         $now_start  = $now->setTime( 0, 0, 0 );
 
@@ -322,77 +177,11 @@ class Date_Handler {
     }
 
     /**
-     * Check if a date should trigger transition (past with optional buffer).
-     *
-     * @param DateTimeImmutable      $date     The date to check.
-     * @param DateTimeImmutable|null $now      The reference date (defaults to now).
-     * @param bool                   $use_time Whether to compare times or just dates.
-     * @return bool True if date has passed the transition threshold.
-     */
-    public static function should_transition( DateTimeImmutable $date, ?DateTimeImmutable $now = null, bool $use_time = false ): bool {
-        if ( $use_time ) {
-            // Time-aware: transition immediately when datetime passes.
-            $now = $now ?? self::get_current_datetime();
-            return $date < $now;
-        }
-
-        // Date-only: add buffer period before transitioning.
-        $now = $now ?? self::get_current_date();
-
-        // Add buffer period to the date.
-        $date_with_buffer = $date->modify( '+' . POSTYCAL_TRANSITION_BUFFER . ' seconds' );
-
-        // Compare just the date portions.
-        $date_start = $date_with_buffer->setTime( 0, 0, 0 );
-        $now_start  = $now->setTime( 0, 0, 0 );
-
-        return $date_start < $now_start;
-    }
-
-    /**
-     * Get the earliest date from an array.
-     *
-     * @param array<DateTimeImmutable> $dates Array of dates.
-     * @return DateTimeImmutable|null The earliest date.
-     */
-    private static function get_earliest_date( array $dates ): ?DateTimeImmutable {
-        if ( empty( $dates ) ) {
-            return null;
-        }
-
-        usort(
-            $dates,
-            fn( DateTimeImmutable $a, DateTimeImmutable $b ): int => $a <=> $b
-        );
-
-        return $dates[0];
-    }
-
-    /**
-     * Get the latest date from an array.
-     *
-     * @param array<DateTimeImmutable> $dates Array of dates.
-     * @return DateTimeImmutable|null The latest date.
-     */
-    private static function get_latest_date( array $dates ): ?DateTimeImmutable {
-        if ( empty( $dates ) ) {
-            return null;
-        }
-
-        usort(
-            $dates,
-            fn( DateTimeImmutable $a, DateTimeImmutable $b ): int => $b <=> $a
-        );
-
-        return $dates[0];
-    }
-
-    /**
-     * Format a date for display.
+     * Format a date for display using the site's date format.
      *
      * @param DateTimeImmutable $date   The date to format.
-     * @param string            $format The date format (default: WordPress date format).
-     * @return string Formatted date string.
+     * @param string            $format PHP date format string. Defaults to WP date format.
+     * @return string
      */
     public static function format( DateTimeImmutable $date, string $format = '' ): string {
         if ( empty( $format ) ) {

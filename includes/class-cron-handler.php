@@ -2,7 +2,17 @@
 /**
  * Cron Handler Class
  *
- * Handles scheduled tasks and category transition logic.
+ * Handles scheduled tasks and post lifecycle transitions.
+ *
+ * Transition rules:
+ *   - Draft/pending posts in the upcoming term whose go-live date has passed
+ *     are published and moved to the active term.
+ *   - Published posts in the active term whose expiration date has passed
+ *     are set to private and moved to the past term.
+ *
+ * On manual post save, the correct term is set immediately based on the
+ * current date vs the stored dates. Post status changes are deferred to
+ * the cron so editors retain control during the current editing session.
  *
  * @package PostyCal
  * @since 2.0.0
@@ -13,7 +23,7 @@ declare(strict_types=1);
 namespace PostyCal;
 
 /**
- * Handles cron operations for PostyCal.
+ * Handles cron operations and post lifecycle for PostyCal.
  */
 class Cron_Handler {
 
@@ -25,6 +35,14 @@ class Cron_Handler {
     private Schedule_Manager $schedule_manager;
 
     /**
+     * Guard flag to prevent re-entrant save_post processing when
+     * wp_update_post is called from within a save_post hook.
+     *
+     * @var bool
+     */
+    private bool $is_updating = false;
+
+    /**
      * Constructor.
      *
      * @param Schedule_Manager $schedule_manager The schedule manager.
@@ -33,8 +51,12 @@ class Cron_Handler {
         $this->schedule_manager = $schedule_manager;
     }
 
+    // -------------------------------------------------------------------------
+    // Cron entry point
+    // -------------------------------------------------------------------------
+
     /**
-     * Process all schedules (called by cron).
+     * Process all schedules (called by the daily cron event).
      *
      * @return void
      */
@@ -46,300 +68,172 @@ class Cron_Handler {
             return;
         }
 
-        Logger::info( 'Starting scheduled category check', [ 'schedule_count' => count( $schedules ) ] );
+        Logger::info( 'Starting scheduled check', [ 'schedule_count' => count( $schedules ) ] );
 
-        foreach ( $schedules as $index => $schedule ) {
-            $this->process_schedule( $schedule, $index );
+        foreach ( $schedules as $schedule ) {
+            $this->process_schedule( $schedule );
         }
 
-        Logger::info( 'Completed scheduled category check' );
+        Logger::info( 'Completed scheduled check' );
     }
 
     /**
-     * Process a single schedule.
+     * Process a single schedule: check go-live and expiration transitions.
      *
      * @param Schedule $schedule The schedule to process.
-     * @param int      $index    The schedule index.
      * @return void
      */
-    private function process_schedule( Schedule $schedule, int $index ): void {
+    private function process_schedule( Schedule $schedule ): void {
         if ( ! $schedule->taxonomy_exists() ) {
             Logger::warning(
                 'Skipping schedule with invalid taxonomy',
-                [
-                    'schedule' => $schedule->name,
-                    'taxonomy' => $schedule->taxonomy,
-                ]
+                [ 'schedule' => $schedule->name, 'taxonomy' => $schedule->taxonomy ]
             );
             return;
         }
 
-        $posts = $this->get_upcoming_posts( $schedule );
+        $published = $this->process_go_live_transitions( $schedule );
+        $expired   = $this->process_expiry_transitions( $schedule );
 
-        if ( empty( $posts ) ) {
-            Logger::debug( 'No upcoming posts to check', [ 'schedule' => $schedule->name ] );
-            return;
+        if ( $published > 0 || $expired > 0 ) {
+            Logger::info(
+                'Processed schedule transitions',
+                [ 'schedule' => $schedule->name, 'published' => $published, 'expired' => $expired ]
+            );
         }
+    }
 
-        $transitioned = 0;
+    /**
+     * Publish draft posts whose go-live date has passed.
+     *
+     * Also handles the edge case where both dates have already passed
+     * (goes directly to the expired state).
+     *
+     * @param Schedule $schedule The schedule.
+     * @return int Number of posts transitioned.
+     */
+    private function process_go_live_transitions( Schedule $schedule ): int {
+        $posts = $this->get_posts_by_terms(
+            $schedule,
+            [ $schedule->upcoming_term, $schedule->active_term ],
+            [ 'draft', 'pending' ]
+        );
+
+        $count = 0;
 
         foreach ( $posts as $post ) {
-            if ( $this->maybe_transition_post( $post->ID, $schedule ) ) {
-                ++$transitioned;
+            $go_live = Date_Handler::get_go_live_date( $post->ID, $schedule );
+
+            if ( null === $go_live ) {
+                continue;
             }
+
+            if ( ! Date_Handler::is_date_past( $go_live, null, $schedule->use_time ) ) {
+                continue;
+            }
+
+            $expiration = Date_Handler::get_expiration_date( $post->ID, $schedule );
+
+            if ( null !== $expiration && Date_Handler::is_date_past( $expiration, null, $schedule->use_time ) ) {
+                // Both dates passed — expire directly without going through active.
+                $this->apply_expiry( $post->ID, $schedule );
+            } else {
+                $this->apply_go_live( $post->ID, $schedule );
+            }
+
+            ++$count;
         }
 
-        if ( $transitioned > 0 ) {
-            Logger::info(
-                'Transitioned posts',
-                [
-                    'schedule' => $schedule->name,
-                    'count'    => $transitioned,
-                ]
-            );
-        }
+        return $count;
     }
 
     /**
-     * Get posts in the upcoming category for a schedule.
+     * Expire published posts whose expiration date has passed.
      *
      * @param Schedule $schedule The schedule.
-     * @return array<\WP_Post> Array of posts.
+     * @return int Number of posts transitioned.
      */
-    private function get_upcoming_posts( Schedule $schedule ): array {
-        $args = [
-            'post_type'      => $schedule->post_type,
-            'posts_per_page' => -1,
-            'post_status'    => 'publish',
-            'tax_query'      => [
-                [
-                    'taxonomy' => $schedule->taxonomy,
-                    'field'    => 'slug',
-                    'terms'    => $schedule->upcoming_term,
-                ],
-            ],
-            'fields'         => 'all',
-        ];
+    private function process_expiry_transitions( Schedule $schedule ): int {
+        $posts = $this->get_posts_by_terms(
+            $schedule,
+            [ $schedule->active_term ],
+            [ 'publish' ]
+        );
 
-        $query = new \WP_Query( $args );
+        $count = 0;
 
-        return $query->posts;
-    }
+        foreach ( $posts as $post ) {
+            $expiration = Date_Handler::get_expiration_date( $post->ID, $schedule );
 
-    /**
-     * Check and possibly transition a single post.
-     *
-     * @param int      $post_id  The post ID.
-     * @param Schedule $schedule The schedule.
-     * @return bool True if post was transitioned.
-     */
-    private function maybe_transition_post( int $post_id, Schedule $schedule ): bool {
-        $date = Date_Handler::get_post_date( $post_id, $schedule );
+            if ( null === $expiration ) {
+                continue;
+            }
 
-        if ( null === $date ) {
-            Logger::debug( 'No date found for post', [ 'post_id' => $post_id ] );
-            return false;
+            if ( ! Date_Handler::is_date_past( $expiration, null, $schedule->use_time ) ) {
+                continue;
+            }
+
+            $this->apply_expiry( $post->ID, $schedule );
+            ++$count;
         }
 
-        if ( ! Date_Handler::should_transition( $date, null, $schedule->use_time ) ) {
-            return false;
-        }
-
-        return $this->transition_post_to_past( $post_id, $schedule );
+        return $count;
     }
 
-    /**
-     * Transition a post to the past category.
-     *
-     * @param int      $post_id  The post ID.
-     * @param Schedule $schedule The schedule.
-     * @return bool True on success.
-     */
-    private function transition_post_to_past( int $post_id, Schedule $schedule ): bool {
-        return $this->set_post_term( $post_id, $schedule, $schedule->past_term );
-    }
+    // -------------------------------------------------------------------------
+    // Save-post entry point
+    // -------------------------------------------------------------------------
 
     /**
-     * Set initial category when post is saved.
+     * Assign the correct taxonomy term when a post is saved.
      *
-     * Called by acf/save_post and save_post hooks. The post_id can be:
-     * - int: Regular post ID
-     * - string 'new_post': New post being created (ACF)
-     * - string 'options': Options page (ACF)
-     * - string '{taxonomy}_{term_id}': Term being edited (ACF)
-     * - string 'user_{user_id}': User being edited (ACF)
+     * Called by save_post at priority 20, after meta box data has been
+     * saved at priority 10. Only sets the term — post status changes
+     * are handled by the cron so editors aren't surprised by immediate
+     * publish/private transitions while they are actively editing.
      *
-     * @param int|string $post_id The post ID (can be string for special ACF cases).
-     * @param \WP_Post|null $post The post object (only from save_post hook).
-     * @param bool|null $update Whether this is an update (only from save_post hook).
+     * @param int $post_id The post ID.
      * @return void
      */
-    public function set_initial_category( int|string $post_id, ?\WP_Post $post = null, ?bool $update = null ): void {
-        // Skip non-post contexts (options pages, terms, users, new posts).
-        if ( ! is_numeric( $post_id ) ) {
-            Logger::debug( 'Skipping non-post context', [ 'post_id' => $post_id ] );
+    public function assign_term_on_save( int $post_id ): void {
+        // Prevent re-entrant calls triggered by wp_update_post inside this class.
+        if ( $this->is_updating ) {
             return;
         }
 
-        $post_id = (int) $post_id;
-
-        // Skip autosaves.
         if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-            Logger::debug( 'Skipping autosave', [ 'post_id' => $post_id ] );
             return;
         }
 
-        // Skip revisions.
         if ( wp_is_post_revision( $post_id ) ) {
-            Logger::debug( 'Skipping revision', [ 'post_id' => $post_id ] );
             return;
         }
 
         $post_type = get_post_type( $post_id );
 
         if ( false === $post_type ) {
-            Logger::debug( 'Could not determine post type', [ 'post_id' => $post_id ] );
             return;
         }
 
         $schedules = $this->schedule_manager->get_for_post_type( $post_type );
 
         if ( empty( $schedules ) ) {
-            // Don't log this - it's expected for most post types.
             return;
         }
-
-        Logger::debug(
-            'Processing post save',
-            [
-                'post_id'        => $post_id,
-                'post_type'      => $post_type,
-                'schedule_count' => count( $schedules ),
-            ]
-        );
 
         foreach ( $schedules as $schedule ) {
-            $this->assign_category_by_date( $post_id, $schedule );
+            $this->set_term_by_dates( $post_id, $schedule );
         }
     }
 
-    /**
-     * Assign category based on date.
-     *
-     * @param int      $post_id  The post ID.
-     * @param Schedule $schedule The schedule.
-     * @return void
-     */
-    private function assign_category_by_date( int $post_id, Schedule $schedule ): void {
-        if ( ! $schedule->taxonomy_exists() ) {
-            Logger::warning(
-                'Cannot assign category - taxonomy does not exist',
-                [
-                    'post_id'  => $post_id,
-                    'taxonomy' => $schedule->taxonomy,
-                ]
-            );
-            return;
-        }
-
-        // Log what we're looking for.
-        Logger::debug(
-            'Looking for date field',
-            [
-                'post_id'    => $post_id,
-                'field_name' => $schedule->date_field,
-                'field_type' => $schedule->field_type,
-            ]
-        );
-
-        $date = Date_Handler::get_post_date( $post_id, $schedule );
-
-        if ( null === $date ) {
-            Logger::info(
-                'No date found during save - skipping category assignment',
-                [
-                    'post_id'    => $post_id,
-                    'schedule'   => $schedule->name,
-                    'field_name' => $schedule->date_field,
-                ]
-            );
-            return;
-        }
-
-        $is_past = Date_Handler::is_date_past( $date, null, $schedule->use_time );
-        $term    = $is_past ? $schedule->past_term : $schedule->upcoming_term;
-
-        Logger::info(
-            'Assigning category based on date',
-            [
-                'post_id'   => $post_id,
-                'schedule'  => $schedule->name,
-                'date'      => $date->format( 'Y-m-d H:i:s' ),
-                'is_past'   => $is_past,
-                'term'      => $term,
-                'use_time'  => $schedule->use_time,
-            ]
-        );
-
-        $this->set_post_term( $post_id, $schedule, $term );
-    }
+    // -------------------------------------------------------------------------
+    // Manual trigger
+    // -------------------------------------------------------------------------
 
     /**
-     * Set a term on a post, replacing existing terms.
+     * Run all schedule transitions immediately (admin manual trigger).
      *
-     * Uses a single wp_set_object_terms call to avoid race conditions.
-     *
-     * @param int      $post_id  The post ID.
-     * @param Schedule $schedule The schedule.
-     * @param string   $term     The term slug to set.
-     * @return bool True on success.
-     */
-    private function set_post_term( int $post_id, Schedule $schedule, string $term ): bool {
-        // Validate term exists.
-        $term_obj = get_term_by( 'slug', $term, $schedule->taxonomy );
-
-        if ( false === $term_obj ) {
-            Logger::error(
-                'Term does not exist',
-                [
-                    'post_id'  => $post_id,
-                    'term'     => $term,
-                    'taxonomy' => $schedule->taxonomy,
-                ]
-            );
-            return false;
-        }
-
-        // Set term (replace mode - append = false).
-        $result = wp_set_object_terms( $post_id, $term, $schedule->taxonomy, false );
-
-        if ( is_wp_error( $result ) ) {
-            Logger::error(
-                'Failed to set post term',
-                [
-                    'post_id' => $post_id,
-                    'term'    => $term,
-                    'error'   => $result->get_error_message(),
-                ]
-            );
-            return false;
-        }
-
-        Logger::debug(
-            'Set post term',
-            [
-                'post_id' => $post_id,
-                'term'    => $term,
-            ]
-        );
-
-        return true;
-    }
-
-    /**
-     * Manually trigger processing for all schedules.
-     *
-     * @return array<string, int> Results with schedule names and transition counts.
+     * @return array<string, array{published: int, expired: int}> Results keyed by schedule name.
      */
     public function trigger_manual_run(): array {
         $results   = [];
@@ -348,20 +242,175 @@ class Cron_Handler {
         Logger::info( 'Manual trigger initiated', [ 'schedule_count' => count( $schedules ) ] );
 
         foreach ( $schedules as $schedule ) {
-            $posts       = $this->get_upcoming_posts( $schedule );
-            $transitioned = 0;
-
-            foreach ( $posts as $post ) {
-                if ( $this->maybe_transition_post( $post->ID, $schedule ) ) {
-                    ++$transitioned;
-                }
-            }
-
-            $results[ $schedule->name ] = $transitioned;
+            $results[ $schedule->name ] = [
+                'published' => $this->process_go_live_transitions( $schedule ),
+                'expired'   => $this->process_expiry_transitions( $schedule ),
+            ];
         }
 
         Logger::info( 'Manual trigger completed', [ 'results' => $results ] );
 
         return $results;
+    }
+
+    // -------------------------------------------------------------------------
+    // Core transition helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Publish a post and assign the active term.
+     *
+     * @param int      $post_id  The post ID.
+     * @param Schedule $schedule The schedule.
+     * @return void
+     */
+    private function apply_go_live( int $post_id, Schedule $schedule ): void {
+        $this->set_post_term( $post_id, $schedule, $schedule->active_term );
+        $this->update_post_status( $post_id, 'publish' );
+
+        Logger::info( 'Post published (go-live)', [ 'post_id' => $post_id, 'schedule' => $schedule->name ] );
+    }
+
+    /**
+     * Set a post to private and assign the past term.
+     *
+     * @param int      $post_id  The post ID.
+     * @param Schedule $schedule The schedule.
+     * @return void
+     */
+    private function apply_expiry( int $post_id, Schedule $schedule ): void {
+        $this->set_post_term( $post_id, $schedule, $schedule->past_term );
+        $this->update_post_status( $post_id, 'private' );
+
+        Logger::info( 'Post expired', [ 'post_id' => $post_id, 'schedule' => $schedule->name ] );
+    }
+
+    /**
+     * Determine the correct term for a post based on its dates and set it.
+     *
+     * Does not change post_status — that is the cron's responsibility.
+     *
+     * @param int      $post_id  The post ID.
+     * @param Schedule $schedule The schedule.
+     * @return void
+     */
+    private function set_term_by_dates( int $post_id, Schedule $schedule ): void {
+        if ( ! $schedule->taxonomy_exists() ) {
+            return;
+        }
+
+        $go_live    = Date_Handler::get_go_live_date( $post_id, $schedule );
+        $expiration = Date_Handler::get_expiration_date( $post_id, $schedule );
+
+        if ( null === $go_live || null === $expiration ) {
+            Logger::debug(
+                'Skipping term assignment — dates not set',
+                [ 'post_id' => $post_id, 'schedule' => $schedule->name ]
+            );
+            return;
+        }
+
+        $is_go_live_passed  = Date_Handler::is_date_past( $go_live, null, $schedule->use_time );
+        $is_expiry_passed   = Date_Handler::is_date_past( $expiration, null, $schedule->use_time );
+
+        if ( $is_expiry_passed ) {
+            $term = $schedule->past_term;
+        } elseif ( $is_go_live_passed ) {
+            $term = $schedule->active_term;
+        } else {
+            $term = $schedule->upcoming_term;
+        }
+
+        Logger::debug(
+            'Setting term on save',
+            [
+                'post_id'  => $post_id,
+                'schedule' => $schedule->name,
+                'term'     => $term,
+            ]
+        );
+
+        $this->set_post_term( $post_id, $schedule, $term );
+    }
+
+    // -------------------------------------------------------------------------
+    // Low-level helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Query posts matching specific taxonomy terms and post statuses.
+     *
+     * @param Schedule $schedule The schedule.
+     * @param string[] $terms    Term slugs to match (IN operator).
+     * @param string[] $statuses Post statuses to match.
+     * @return \WP_Post[]
+     */
+    private function get_posts_by_terms( Schedule $schedule, array $terms, array $statuses ): array {
+        $args = [
+            'post_type'      => $schedule->post_type,
+            'post_status'    => $statuses,
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'tax_query'      => [
+                [
+                    'taxonomy' => $schedule->taxonomy,
+                    'field'    => 'slug',
+                    'terms'    => $terms,
+                    'operator' => 'IN',
+                ],
+            ],
+            'fields'         => 'all',
+        ];
+
+        return ( new \WP_Query( $args ) )->posts;
+    }
+
+    /**
+     * Set a single taxonomy term on a post, replacing any existing terms.
+     *
+     * @param int      $post_id  The post ID.
+     * @param Schedule $schedule The schedule.
+     * @param string   $term     Term slug to assign.
+     * @return bool True on success.
+     */
+    private function set_post_term( int $post_id, Schedule $schedule, string $term ): bool {
+        $term_obj = get_term_by( 'slug', $term, $schedule->taxonomy );
+
+        if ( false === $term_obj ) {
+            Logger::error(
+                'Cannot assign term — term does not exist',
+                [ 'post_id' => $post_id, 'term' => $term, 'taxonomy' => $schedule->taxonomy ]
+            );
+            return false;
+        }
+
+        $result = wp_set_object_terms( $post_id, $term, $schedule->taxonomy, false );
+
+        if ( is_wp_error( $result ) ) {
+            Logger::error(
+                'wp_set_object_terms failed',
+                [ 'post_id' => $post_id, 'term' => $term, 'error' => $result->get_error_message() ]
+            );
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Update post status without triggering re-entrant processing.
+     *
+     * @param int    $post_id The post ID.
+     * @param string $status  Target post status ('publish' or 'private').
+     * @return void
+     */
+    private function update_post_status( int $post_id, string $status ): void {
+        if ( get_post_status( $post_id ) === $status ) {
+            return;
+        }
+
+        $this->is_updating = true;
+        wp_update_post( [ 'ID' => $post_id, 'post_status' => $status ] );
+        $this->is_updating = false;
     }
 }

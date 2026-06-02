@@ -3,7 +3,7 @@
  * Plugin Name: PostyCal
  * Plugin URI: https://crawforddesigngroup.com/postycal
  * Description: Automatically manages post category transitions based on date fields
- * Version: 2.0.0
+ * Version: 2.0.5
  * Requires at least: 6.0
  * Requires PHP: 8.2
  * Author: Crawford Design Group
@@ -24,7 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Plugin constants.
-define( 'POSTYCAL_VERSION', '2.0.0' );
+define( 'POSTYCAL_VERSION', '2.0.5' );
 define( 'POSTYCAL_PLUGIN_FILE', __FILE__ );
 define( 'POSTYCAL_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'POSTYCAL_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -54,6 +54,21 @@ spl_autoload_register( function ( string $class_name ): void {
         require_once $file_path;
     }
 } );
+
+/**
+ * Return the Unix timestamp for the next midnight in the site's configured timezone.
+ *
+ * strtotime('tomorrow midnight') uses the PHP/server timezone, which may differ
+ * from the WordPress timezone setting. Using DateTimeImmutable with the WP
+ * timezone ensures the cron fires at midnight local time.
+ *
+ * @return int Unix timestamp.
+ */
+function postycal_next_midnight(): int {
+    $timezone = PostyCal\Date_Handler::get_timezone();
+    $midnight  = new \DateTimeImmutable( 'tomorrow midnight', $timezone );
+    return $midnight->getTimestamp();
+}
 
 /**
  * Initialize the plugin.
@@ -87,7 +102,7 @@ function postycal_activate(): void {
     // Schedule cron if we have schedules.
     $schedules = get_option( 'pc_schedules', [] );
     if ( ! empty( $schedules ) && ! wp_next_scheduled( 'pc_daily_category_check' ) ) {
-        wp_schedule_event( strtotime( 'tomorrow midnight' ), 'daily', 'pc_daily_category_check' );
+        wp_schedule_event( postycal_next_midnight(), 'daily', 'pc_daily_category_check' );
     }
 
     // Flush rewrite rules.

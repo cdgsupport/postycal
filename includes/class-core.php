@@ -82,18 +82,17 @@ final class Core {
     /**
      * Setup WordPress hooks.
      *
+     * Meta box data is saved at priority 10 so that dates are written to
+     * post meta before the term-assignment hook reads them at priority 20.
+     *
      * @return void
      */
     private function setup_hooks(): void {
-        // Register cron hook.
+        // Daily cron.
         add_action( 'pc_daily_category_check', [ $this->cron_handler, 'process_all_schedules' ] );
 
-        // ACF save hook for initial category assignment (priority 20 = after ACF saves at 10).
-        add_action( 'acf/save_post', [ $this->cron_handler, 'set_initial_category' ], 20 );
-
-        // Fallback: also hook into save_post for non-ACF saves or as backup.
-        // Priority 99 ensures it runs after most other save operations.
-        add_action( 'save_post', [ $this->cron_handler, 'set_initial_category' ], 99 );
+        // Term assignment on every post save (after meta box save at priority 10).
+        add_action( 'save_post', [ $this->cron_handler, 'assign_term_on_save' ], 20, 1 );
     }
 
     /**

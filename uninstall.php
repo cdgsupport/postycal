@@ -2,15 +2,23 @@
 /**
  * PostyCal Uninstall
  *
- * Removes all plugin data when the plugin is deleted.
+ * Removes all plugin data when the plugin is deleted through WordPress.
+ * Post meta created by PostyCal uses the prefix _postycal_ so we can
+ * bulk-delete it with a single query.
  *
  * @package PostyCal
  */
 
-// If uninstall not called from WordPress, exit.
 if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
     exit;
 }
+
+global $wpdb;
+
+// Remove all PostyCal post meta (go-live and expiration date fields).
+$wpdb->query(
+    "DELETE FROM {$wpdb->postmeta} WHERE meta_key LIKE '_postycal_%'"
+);
 
 // Remove plugin options.
 delete_option( 'pc_schedules' );

@@ -194,6 +194,10 @@ class Schedule_Manager {
     /**
      * Save schedules to database.
      *
+     * update_option() returns false both on failure AND when the value is
+     * unchanged (no-op). We treat the no-op case as success by checking
+     * get_option() equality before deciding whether the save failed.
+     *
      * @param array<int, Schedule> $schedules Schedules to save.
      * @return bool True on success.
      */
@@ -205,11 +209,13 @@ class Schedule_Manager {
 
         $result = update_option( self::OPTION_NAME, $data );
 
-        if ( $result ) {
+        // update_option returns false when data is unchanged — treat that as success.
+        if ( $result || get_option( self::OPTION_NAME ) === $data ) {
             $this->schedules = $schedules;
+            return true;
         }
 
-        return $result;
+        return false;
     }
 
     /**
@@ -246,6 +252,14 @@ class Schedule_Manager {
             );
         }
 
+        if ( ! $terms['active'] ) {
+            $errors['active_term'] = sprintf(
+                /* translators: %s: term slug */
+                __( 'Term "%s" does not exist.', 'postycal' ),
+                $schedule->active_term
+            );
+        }
+
         if ( ! $terms['past'] ) {
             $errors['past_term'] = sprintf(
                 /* translators: %s: term slug */
@@ -264,7 +278,7 @@ class Schedule_Manager {
      */
     private function maybe_schedule_cron(): void {
         if ( $this->has_schedules() && ! wp_next_scheduled( 'pc_daily_category_check' ) ) {
-            wp_schedule_event( strtotime( 'tomorrow midnight' ), 'daily', 'pc_daily_category_check' );
+            wp_schedule_event( postycal_next_midnight(), 'daily', 'pc_daily_category_check' );
         }
     }
 

@@ -201,38 +201,35 @@
     vertical-align: middle;
 }
 
-/* Dynamic select fields */
-.postycal-modal-content select optgroup {
-    font-weight: bold;
-    color: #1d2327;
-}
-
-.postycal-modal-content select option {
-    font-weight: normal;
-    padding: 5px 10px;
-}
-
-/* Manual entry toggle */
-.postycal-manual-entry {
-    margin-top: 10px !important;
-    font-style: normal !important;
-}
-
-.postycal-manual-entry label {
-    cursor: pointer;
-}
-
-.postycal-manual-entry input[type="checkbox"] {
-    margin-right: 5px;
-}
-
-/* Field description updates */
-#postycal-date-field-desc {
-    margin-top: 5px;
-}
-
 /* Disabled select styling */
 .postycal-modal-content select:disabled {
     background-color: #f0f0f1;
     cursor: not-allowed;
+}
+
+/* Meta box — Publication Schedule */
+#postycal_publication_dates .postycal-date-field {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+#postycal_publication_dates p {
+    margin-top: 0;
+    margin-bottom: 12px;
+}
+
+#postycal_publication_dates p:last-child {
+    margin-bottom: 0;
+}
+
+#postycal_publication_dates label {
+    display: block;
+    margin-bottom: 4px;
+    color: #1d2327;
+}
+
+#postycal_publication_dates h4 {
+    border-bottom: 1px solid #dcdcde;
+    padding-bottom: 6px;
+    color: #1d2327;
 }
