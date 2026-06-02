@@ -98,6 +98,18 @@ function postycal_activate(): void {
     if ( get_option( 'pc_schedules' ) === false ) {
         add_option( 'pc_schedules', [] );
     }
+    if ( get_option( 'pc_post_types' ) === false ) {
+        add_option( 'pc_post_types', [] );
+    }
+    if ( get_option( 'pc_taxonomies' ) === false ) {
+        add_option( 'pc_taxonomies', [] );
+    }
+
+    // Register any already-saved CPTs and taxonomies so rewrite rules include them.
+    $post_type_manager = new PostyCal\Post_Type_Manager();
+    $taxonomy_manager  = new PostyCal\Taxonomy_Manager();
+    $post_type_manager->register_all();
+    $taxonomy_manager->register_all();
 
     // Schedule cron if we have schedules.
     $schedules = get_option( 'pc_schedules', [] );
@@ -105,7 +117,6 @@ function postycal_activate(): void {
         wp_schedule_event( postycal_next_midnight(), 'daily', 'pc_daily_category_check' );
     }
 
-    // Flush rewrite rules.
     flush_rewrite_rules();
 }
 register_activation_hook( __FILE__, 'postycal_activate' );

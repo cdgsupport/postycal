@@ -5,6 +5,16 @@
  * @since 2.0.0
  */
 
+/* Tab navigation */
+.postycal-tab-nav {
+    margin-bottom: 0;
+    border-bottom: 1px solid #c3c4c7;
+}
+
+.postycal-tab-panel {
+    padding-top: 20px;
+}
+
 /* Info Box */
 .postycal-info-box {
     background: #fff;

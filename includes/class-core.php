@@ -25,22 +25,26 @@ final class Core {
     private static ?Core $instance = null;
 
     /**
-     * Schedule manager instance.
-     *
+     * @var Post_Type_Manager
+     */
+    private Post_Type_Manager $post_type_manager;
+
+    /**
+     * @var Taxonomy_Manager
+     */
+    private Taxonomy_Manager $taxonomy_manager;
+
+    /**
      * @var Schedule_Manager
      */
     private Schedule_Manager $schedule_manager;
 
     /**
-     * Cron handler instance.
-     *
      * @var Cron_Handler
      */
     private Cron_Handler $cron_handler;
 
     /**
-     * Admin instance (only in admin context).
-     *
      * @var Admin|null
      */
     private ?Admin $admin = null;
@@ -58,7 +62,7 @@ final class Core {
     }
 
     /**
-     * Private constructor for singleton pattern.
+     * Private constructor.
      */
     private function __construct() {
         $this->init_components();
@@ -66,38 +70,83 @@ final class Core {
     }
 
     /**
-     * Initialize plugin components.
+     * Initialize all plugin components.
      *
      * @return void
      */
     private function init_components(): void {
-        $this->schedule_manager = new Schedule_Manager();
-        $this->cron_handler     = new Cron_Handler( $this->schedule_manager );
+        $this->post_type_manager = new Post_Type_Manager();
+        $this->taxonomy_manager  = new Taxonomy_Manager();
+        $this->schedule_manager  = new Schedule_Manager();
+        $this->cron_handler      = new Cron_Handler( $this->schedule_manager );
 
         if ( is_admin() ) {
-            $this->admin = new Admin( $this->schedule_manager );
+            $this->admin = new Admin(
+                $this->schedule_manager,
+                $this->post_type_manager,
+                $this->taxonomy_manager
+            );
         }
     }
 
     /**
-     * Setup WordPress hooks.
+     * Register all WordPress hooks.
      *
-     * Meta box data is saved at priority 10 so that dates are written to
-     * post meta before the term-assignment hook reads them at priority 20.
+     * Registration order:
+     *   init priority  5 — PostyCal CPTs (must exist before taxonomies)
+     *   init priority  6 — PostyCal taxonomies (attached to CPTs)
+     *   init priority 99 — flush rewrite rules if a CPT/taxonomy changed
+     *
+     * save_post priority 10 — Admin saves meta box date fields
+     * save_post priority 20 — Cron_Handler assigns the correct term
      *
      * @return void
      */
     private function setup_hooks(): void {
-        // Daily cron.
-        add_action( 'pc_daily_category_check', [ $this->cron_handler, 'process_all_schedules' ] );
+        add_action( 'init', [ $this->post_type_manager, 'register_all' ], 5 );
+        add_action( 'init', [ $this->taxonomy_manager, 'register_all' ], 6 );
+        add_action( 'init', [ $this, 'maybe_flush_rewrites' ], 99 );
 
-        // Term assignment on every post save (after meta box save at priority 10).
+        add_action( 'pc_daily_category_check', [ $this->cron_handler, 'process_all_schedules' ] );
         add_action( 'save_post', [ $this->cron_handler, 'assign_term_on_save' ], 20, 1 );
     }
 
     /**
-     * Get schedule manager instance.
+     * Flush rewrite rules once after a CPT or taxonomy change.
      *
+     * The managers set a short-lived transient when they save. This hook
+     * checks for it on the next init (which may be the same request for
+     * AJAX or the next page load) and flushes exactly once.
+     *
+     * @return void
+     */
+    public function maybe_flush_rewrites(): void {
+        if ( get_transient( 'postycal_flush_rewrites' ) ) {
+            delete_transient( 'postycal_flush_rewrites' );
+            flush_rewrite_rules();
+            Logger::debug( 'Flushed rewrite rules after PostyCal structure change' );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
+
+    /**
+     * @return Post_Type_Manager
+     */
+    public function get_post_type_manager(): Post_Type_Manager {
+        return $this->post_type_manager;
+    }
+
+    /**
+     * @return Taxonomy_Manager
+     */
+    public function get_taxonomy_manager(): Taxonomy_Manager {
+        return $this->taxonomy_manager;
+    }
+
+    /**
      * @return Schedule_Manager
      */
     public function get_schedule_manager(): Schedule_Manager {
@@ -105,26 +154,16 @@ final class Core {
     }
 
     /**
-     * Get cron handler instance.
-     *
      * @return Cron_Handler
      */
     public function get_cron_handler(): Cron_Handler {
         return $this->cron_handler;
     }
 
-    /**
-     * Prevent cloning.
-     *
-     * @return void
-     */
     private function __clone() {}
 
     /**
-     * Prevent unserialization.
-     *
-     * @throws \Exception When attempting to unserialize.
-     * @return void
+     * @throws \Exception
      */
     public function __wakeup(): void {
         throw new \Exception( 'Cannot unserialize singleton.' );
