@@ -203,11 +203,10 @@ class Admin {
                     <button type="button" class="button button-primary" id="postycal-add-schedule">
                         <?php esc_html_e( 'Add New Schedule', 'postycal' ); ?>
                     </button>
-                    <?php if ( $this->schedule_manager->has_schedules() ) : ?>
-                        <button type="button" class="button button-secondary" id="postycal-trigger-cron">
-                            <?php esc_html_e( 'Run All Schedules Now', 'postycal' ); ?>
-                        </button>
-                    <?php endif; ?>
+                    <button type="button" class="button button-secondary" id="postycal-trigger-cron"
+                        <?php echo $this->schedule_manager->has_schedules() ? '' : 'style="display:none;"'; ?>>
+                        <?php esc_html_e( 'Run All Schedules Now', 'postycal' ); ?>
+                    </button>
                 </p>
             </div>
 

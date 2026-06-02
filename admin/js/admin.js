@@ -57,6 +57,7 @@
             $( '#postycal-cpt-modal .postycal-modal-backdrop' ).on( 'click', function() { self.closeModal( '#postycal-cpt-modal' ); } );
             $( '#postycal-cpt-form' ).on( 'submit', function( e ) { self.submitCpt( e ); } );
             $( '#postycal-cpt-name' ).on( 'input', function() { self.autoSlug( $( this ).val(), '#postycal-cpt-slug', 20 ); } );
+            $( '#postycal-cpt-slug' ).on( 'input', function() { $( this ).data( 'manual', true ); } );
             $( document ).on( 'click', '.postycal-edit-post-type',   function( e ) { self.openCptEdit( e ); } );
             $( document ).on( 'click', '.postycal-delete-post-type', function( e ) { self.deleteCpt( e ); } );
 
@@ -66,6 +67,7 @@
             $( '#postycal-tax-modal .postycal-modal-backdrop' ).on( 'click', function() { self.closeModal( '#postycal-tax-modal' ); } );
             $( '#postycal-tax-form' ).on( 'submit', function( e ) { self.submitTax( e ); } );
             $( '#postycal-tax-name' ).on( 'input', function() { self.autoSlug( $( this ).val(), '#postycal-tax-slug', 32 ); } );
+            $( '#postycal-tax-slug' ).on( 'input', function() { $( this ).data( 'manual', true ); } );
             $( document ).on( 'click', '.postycal-edit-taxonomy',   function( e ) { self.openTaxEdit( e ); } );
             $( document ).on( 'click', '.postycal-delete-taxonomy', function( e ) { self.deleteTax( e ); } );
 
@@ -425,7 +427,7 @@
                 description:   $( '#postycal-cpt-description' ).val(),
                 has_archive:   $( '#postycal-cpt-has-archive' ).is( ':checked' ) ? '1' : '',
                 show_in_rest:  $( '#postycal-cpt-show-in-rest' ).is( ':checked' ) ? '1' : '',
-                'supports[]':  supports,
+                supports:      supports,
                 menu_icon:     $( '#postycal-cpt-menu-icon' ).val()
             } )
             .done( function( r ) {
@@ -532,7 +534,7 @@
                 slug:            $( '#postycal-tax-slug' ).val(),
                 hierarchical:    $( '#postycal-tax-hierarchical' ).is( ':checked' ) ? '1' : '',
                 show_in_rest:    $( '#postycal-tax-show-in-rest' ).is( ':checked' ) ? '1' : '',
-                'post_types[]':  post_types,
+                post_types:      post_types,
                 seed_upcoming:   $( '[name="seed_upcoming"]' ).val(),
                 seed_active:     $( '[name="seed_active"]' ).val(),
                 seed_past:       $( '[name="seed_past"]' ).val()
