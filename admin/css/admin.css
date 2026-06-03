@@ -5,10 +5,17 @@
  * @since 2.0.0
  */
 
-/* Tab navigation */
+/* Tab navigation — uses <button> elements styled as tabs */
 .postycal-tab-nav {
     margin-bottom: 0;
     border-bottom: 1px solid #c3c4c7;
+}
+
+.postycal-tab-nav .nav-tab {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
 }
 
 .postycal-tab-panel {
@@ -215,6 +222,12 @@
 .postycal-modal-content select:disabled {
     background-color: #f0f0f1;
     cursor: not-allowed;
+}
+
+/* Inline modal error message */
+.postycal-modal-error {
+    margin: 0 0 15px !important;
+    padding: 8px 12px !important;
 }
 
 /* Meta box — Publication Schedule */

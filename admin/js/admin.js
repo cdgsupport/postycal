@@ -1,8 +1,8 @@
 /**
  * PostyCal Admin JavaScript
  *
- * Handles tab switching, schedule / post-type / taxonomy CRUD modals,
- * and all dynamic AJAX interactions.
+ * Tab switching, schedule / post-type / taxonomy CRUD modals,
+ * and AJAX interactions.
  *
  * @package PostyCal
  * @since 2.1.0
@@ -17,8 +17,8 @@
         schedules:  [],
         postTypes:  [],
         taxonomies: [],
-        taxCache:   {},   // taxonomies per post type
-        termsCache: {},   // terms per taxonomy
+        taxCache:   {},
+        termsCache: {},
 
         init: function() {
             this.schedules  = this.config.schedules  || [];
@@ -34,14 +34,14 @@
         bindEvents: function() {
             const self = this;
 
-            // Tab switching.
-            $( '.postycal-tab-nav .nav-tab' ).on( 'click', function( e ) {
+            // Tab switching — delegated so it works even if the nav is re-rendered.
+            $( document ).on( 'click', '.postycal-tab-btn', function( e ) {
                 e.preventDefault();
                 self.switchTab( $( this ).data( 'tab' ) );
             } );
 
             // ---- Schedule modal ----
-            $( '#postycal-add-schedule' ).on( 'click', function( e ) { self.openScheduleAdd( e ); } );
+            $( '#postycal-add-schedule' ).on( 'click', function() { self.openScheduleAdd(); } );
             $( '#postycal-cancel' ).on( 'click', function() { self.closeModal( '#postycal-modal' ); } );
             $( '#postycal-modal .postycal-modal-backdrop' ).on( 'click', function() { self.closeModal( '#postycal-modal' ); } );
             $( '#postycal-schedule-form' ).on( 'submit', function( e ) { self.submitSchedule( e ); } );
@@ -52,8 +52,8 @@
             $( document ).on( 'click', '.postycal-delete-schedule', function( e ) { self.deleteSchedule( e ); } );
 
             // ---- Post Type modal ----
-            $( '#postycal-add-post-type' ).on( 'click', function( e ) { self.openCptAdd( e ); } );
-            $( '.postycal-cpt-cancel' ).on( 'click', function() { self.closeModal( '#postycal-cpt-modal' ); } );
+            $( '#postycal-add-post-type' ).on( 'click', function() { self.openCptAdd(); } );
+            $( '#postycal-cpt-cancel' ).on( 'click', function() { self.closeModal( '#postycal-cpt-modal' ); } );
             $( '#postycal-cpt-modal .postycal-modal-backdrop' ).on( 'click', function() { self.closeModal( '#postycal-cpt-modal' ); } );
             $( '#postycal-cpt-form' ).on( 'submit', function( e ) { self.submitCpt( e ); } );
             $( '#postycal-cpt-name' ).on( 'input', function() { self.autoSlug( $( this ).val(), '#postycal-cpt-slug', 20 ); } );
@@ -62,8 +62,8 @@
             $( document ).on( 'click', '.postycal-delete-post-type', function( e ) { self.deleteCpt( e ); } );
 
             // ---- Taxonomy modal ----
-            $( '#postycal-add-taxonomy' ).on( 'click', function( e ) { self.openTaxAdd( e ); } );
-            $( '.postycal-tax-cancel' ).on( 'click', function() { self.closeModal( '#postycal-tax-modal' ); } );
+            $( '#postycal-add-taxonomy' ).on( 'click', function() { self.openTaxAdd(); } );
+            $( '#postycal-tax-cancel' ).on( 'click', function() { self.closeModal( '#postycal-tax-modal' ); } );
             $( '#postycal-tax-modal .postycal-modal-backdrop' ).on( 'click', function() { self.closeModal( '#postycal-tax-modal' ); } );
             $( '#postycal-tax-form' ).on( 'submit', function( e ) { self.submitTax( e ); } );
             $( '#postycal-tax-name' ).on( 'input', function() { self.autoSlug( $( this ).val(), '#postycal-tax-slug', 32 ); } );
@@ -71,7 +71,7 @@
             $( document ).on( 'click', '.postycal-edit-taxonomy',   function( e ) { self.openTaxEdit( e ); } );
             $( document ).on( 'click', '.postycal-delete-taxonomy', function( e ) { self.deleteTax( e ); } );
 
-            // Escape key closes any open modal.
+            // Escape key.
             $( document ).on( 'keydown', function( e ) {
                 if ( e.key === 'Escape' ) {
                     $( '.postycal-modal:visible' ).each( function() {
@@ -86,31 +86,44 @@
         // -----------------------------------------------------------------
 
         switchTab: function( tab ) {
-            $( '.postycal-tab-nav .nav-tab' ).removeClass( 'nav-tab-active' );
-            $( '.postycal-tab-nav [data-tab="' + tab + '"]' ).addClass( 'nav-tab-active' );
+            $( '.postycal-tab-btn' ).removeClass( 'nav-tab-active' );
+            $( '.postycal-tab-btn[data-tab="' + tab + '"]' ).addClass( 'nav-tab-active' );
             $( '.postycal-tab-panel' ).hide();
             $( '#postycal-tab-' + tab ).show();
         },
 
         // -----------------------------------------------------------------
-        // Generic modal helpers
+        // Modal helpers
         // -----------------------------------------------------------------
 
         closeModal: function( selector ) {
             $( selector ).hide();
+            this.clearModalError( selector + ' .postycal-modal-error' );
+        },
+
+        showModalError: function( modalSelector, message ) {
+            const $err = $( modalSelector + ' .postycal-modal-error' );
+            $err.find( 'p' ).text( message );
+            $err.show();
+            // Scroll the modal content to the top so the error is visible.
+            $( modalSelector + ' .postycal-modal-content' ).scrollTop( 0 );
+        },
+
+        clearModalError: function( selector ) {
+            $( selector ).hide().find( 'p' ).text( '' );
         },
 
         // -----------------------------------------------------------------
-        // Utility: auto-generate slug from name
+        // Slug auto-generation
         // -----------------------------------------------------------------
 
         autoSlug: function( name, slugSelector, maxLen ) {
             const $slug = $( slugSelector );
             if ( $slug.data( 'manual' ) ) return;
-            let slug = name.toLowerCase()
-                           .replace( /[^a-z0-9]+/g, '_' )
-                           .replace( /^_+|_+$/g, '' )
-                           .substring( 0, maxLen );
+            const slug = name.toLowerCase()
+                             .replace( /[^a-z0-9]+/g, '_' )
+                             .replace( /^_+|_+$/g, '' )
+                             .substring( 0, maxLen );
             $slug.val( slug );
         },
 
@@ -118,8 +131,7 @@
         // Schedule modal
         // -----------------------------------------------------------------
 
-        openScheduleAdd: function( e ) {
-            e.preventDefault();
+        openScheduleAdd: function() {
             this.resetScheduleForm();
             $( '#postycal-modal-title' ).text( this.config.i18n.addSchedule );
             $( '#postycal-schedule-index' ).val( '' );
@@ -130,7 +142,7 @@
         openScheduleEdit: function( e ) {
             e.preventDefault();
             const self     = this;
-            const index    = $( e.currentTarget ).data( 'index' );
+            const index    = parseInt( $( e.currentTarget ).data( 'index' ), 10 );
             const schedule = this.schedules[ index ];
             if ( ! schedule ) return;
 
@@ -158,6 +170,7 @@
             $( '#postycal-schedule-form' )[ 0 ].reset();
             $( '#postycal-schedule-index' ).val( '' );
             $( '#postycal-use-time' ).prop( 'checked', false );
+            this.clearModalError( '#postycal-modal .postycal-modal-error' );
             const taxPH  = '<option value="">' + this.config.i18n.selectPostTypeFirst + '</option>';
             const termPH = '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>';
             $( '#postycal-taxonomy' ).html( taxPH );
@@ -166,16 +179,14 @@
 
         onSchedulePostTypeChange: function() {
             const postType = $( '#postycal-post-type' ).val();
-            const termPH   = '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>';
             $( '#postycal-taxonomy' ).html( '<option value="">' + this.config.i18n.selectPostTypeFirst + '</option>' );
-            $( '#postycal-upcoming-term, #postycal-active-term, #postycal-past-term' ).html( termPH );
+            $( '#postycal-upcoming-term, #postycal-active-term, #postycal-past-term' ).html( '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>' );
             if ( postType ) this.loadTaxonomiesForPostType( postType );
         },
 
         onScheduleTaxonomyChange: function() {
             const taxonomy = $( '#postycal-taxonomy' ).val();
-            const termPH   = '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>';
-            $( '#postycal-upcoming-term, #postycal-active-term, #postycal-past-term' ).html( termPH );
+            $( '#postycal-upcoming-term, #postycal-active-term, #postycal-past-term' ).html( '<option value="">' + this.config.i18n.selectTaxonomyFirst + '</option>' );
             if ( taxonomy ) this.loadTermsForTaxonomy( taxonomy );
         },
 
@@ -194,8 +205,8 @@
             $spin.addClass( 'is-active' );
 
             $.post( this.config.ajaxUrl, {
-                action:    'postycal_get_post_type_taxonomies',
-                nonce:     this.config.nonce,
+                action: 'postycal_get_post_type_taxonomies',
+                nonce:  this.config.nonce,
                 post_type: postType
             } )
             .done( function( r ) {
@@ -215,21 +226,19 @@
 
         populateTaxonomyDropdown: function( taxonomies ) {
             const self = this;
-            let html   = '<option value="">' + this.config.i18n.selectPostTypeFirst.replace( 'Post Type', 'Taxonomy' ) + '</option>';
-
-            if ( ! taxonomies || taxonomies.length === 0 ) {
+            let html   = '<option value="">' + this.config.i18n.selectPostTypeFirst.replace( 'Post Type first', 'Taxonomy' ) + '</option>';
+            if ( ! taxonomies || ! taxonomies.length ) {
                 html = '<option value="">' + this.config.i18n.noTaxonomiesFound + '</option>';
             } else {
                 taxonomies.forEach( function( t ) {
                     html += '<option value="' + self.escapeHtml( t.slug ) + '">' + self.escapeHtml( t.name ) + '</option>';
                 } );
             }
-
             $( '#postycal-taxonomy' ).html( html );
         },
 
         loadTermsForTaxonomy: function( taxonomy, callback ) {
-            const self = this;
+            const self  = this;
             const $spin = $( '#postycal-terms-spinner' );
             const loading = '<option value="">' + this.config.i18n.loading + '</option>';
 
@@ -267,7 +276,7 @@
         populateTermDropdowns: function( terms ) {
             const self = this;
             let html   = '<option value="">' + this.config.i18n.selectTerm + '</option>';
-            if ( ! terms || terms.length === 0 ) {
+            if ( ! terms || ! terms.length ) {
                 html = '<option value="">' + this.config.i18n.noTermsFound + '</option>';
             } else {
                 terms.forEach( function( t ) {
@@ -283,6 +292,7 @@
             e.preventDefault();
             const self = this;
             const $btn = $( '#postycal-schedule-form button[type="submit"]' );
+            this.clearModalError( '#postycal-modal .postycal-modal-error' );
             this.setLoading( $btn, true );
 
             $.post( this.config.ajaxUrl, {
@@ -304,18 +314,18 @@
                     self.closeModal( '#postycal-modal' );
                     self.showNotice( 'success', r.data.message );
                 } else {
-                    self.showNotice( 'error', r.data.message || self.config.i18n.saveError );
+                    self.showModalError( '#postycal-modal', r.data.message || self.config.i18n.saveError );
                 }
             } )
-            .fail( function() { self.showNotice( 'error', self.config.i18n.saveError ); } )
+            .fail( function() { self.showModalError( '#postycal-modal', self.config.i18n.saveError ); } )
             .always( function() { self.setLoading( $btn, false ); } );
         },
 
         deleteSchedule: function( e ) {
             e.preventDefault();
             if ( ! confirm( this.config.i18n.confirmDelete ) ) return;
-            const self  = this;
-            const $btn  = $( e.currentTarget );
+            const self = this;
+            const $btn = $( e.currentTarget );
             this.setLoading( $btn, true );
 
             $.post( this.config.ajaxUrl, {
@@ -324,13 +334,8 @@
                 index:  $btn.data( 'index' )
             } )
             .done( function( r ) {
-                if ( r.success ) {
-                    self.schedules = r.data.schedules;
-                    self.refreshSchedulesTable();
-                    self.showNotice( 'success', r.data.message );
-                } else {
-                    self.showNotice( 'error', r.data.message || self.config.i18n.deleteError );
-                }
+                if ( r.success ) { self.schedules = r.data.schedules; self.refreshSchedulesTable(); self.showNotice( 'success', r.data.message ); }
+                else { self.showNotice( 'error', r.data.message || self.config.i18n.deleteError ); }
             } )
             .fail( function() { self.showNotice( 'error', self.config.i18n.deleteError ); } )
             .always( function() { self.setLoading( $btn, false ); } );
@@ -354,20 +359,17 @@
                         if ( parts.length ) msg += ' (' + parts.join( ' | ' ) + ')';
                     }
                     self.showNotice( 'success', msg );
-                } else {
-                    self.showNotice( 'error', r.data.message || self.config.i18n.triggerError );
-                }
+                } else { self.showNotice( 'error', r.data.message || self.config.i18n.triggerError ); }
             } )
             .fail( function() { self.showNotice( 'error', self.config.i18n.triggerError ); } )
             .always( function() { self.setLoading( $btn, false ); } );
         },
 
         // -----------------------------------------------------------------
-        // Post type modal
+        // Post Type modal
         // -----------------------------------------------------------------
 
-        openCptAdd: function( e ) {
-            e.preventDefault();
+        openCptAdd: function() {
             this.resetCptForm();
             $( '#postycal-cpt-modal-title' ).text( this.config.i18n.addPostType );
             $( '#postycal-cpt-slug' ).removeData( 'manual' );
@@ -377,7 +379,7 @@
 
         openCptEdit: function( e ) {
             e.preventDefault();
-            const index = $( e.currentTarget ).data( 'index' );
+            const index = parseInt( $( e.currentTarget ).data( 'index' ), 10 );
             const pt    = this.postTypes[ index ];
             if ( ! pt ) return;
 
@@ -406,42 +408,56 @@
             $( '#postycal-cpt-index' ).val( '' );
             $( '#postycal-cpt-show-in-rest' ).prop( 'checked', true );
             $( '.postycal-cpt-supports[value="editor"]' ).prop( 'checked', true );
+            this.clearModalError( '#postycal-cpt-modal .postycal-modal-error' );
         },
 
         submitCpt: function( e ) {
             e.preventDefault();
             const self     = this;
             const $btn     = $( '#postycal-cpt-form button[type="submit"]' );
+            const name     = $.trim( $( '#postycal-cpt-name' ).val() );
+            const slug     = $.trim( $( '#postycal-cpt-slug' ).val() );
+
+            this.clearModalError( '#postycal-cpt-modal .postycal-modal-error' );
+
+            // JS-side validation.
+            if ( ! name ) { this.showModalError( '#postycal-cpt-modal', 'Name is required.' ); return; }
+            if ( ! slug ) { this.showModalError( '#postycal-cpt-modal', 'Slug is required.' ); return; }
+            if ( ! /^[a-z0-9_]{1,20}$/.test( slug ) ) {
+                this.showModalError( '#postycal-cpt-modal', 'Slug must be lowercase letters, numbers, and underscores only (max 20 characters).' );
+                return;
+            }
+
             const supports = [];
             $( '.postycal-cpt-supports:checked' ).each( function() { supports.push( $( this ).val() ); } );
 
             this.setLoading( $btn, true );
 
             $.post( this.config.ajaxUrl, {
-                action:        'postycal_save_post_type',
-                nonce:         this.config.nonce,
-                index:         $( '#postycal-cpt-index' ).val(),
-                name:          $( '#postycal-cpt-name' ).val(),
-                plural:        $( '#postycal-cpt-plural' ).val(),
-                slug:          $( '#postycal-cpt-slug' ).val(),
-                description:   $( '#postycal-cpt-description' ).val(),
-                has_archive:   $( '#postycal-cpt-has-archive' ).is( ':checked' ) ? '1' : '',
-                show_in_rest:  $( '#postycal-cpt-show-in-rest' ).is( ':checked' ) ? '1' : '',
-                supports:      supports,
-                menu_icon:     $( '#postycal-cpt-menu-icon' ).val()
+                action:       'postycal_save_post_type',
+                nonce:        this.config.nonce,
+                index:        $( '#postycal-cpt-index' ).val(),
+                name:         name,
+                plural:       $.trim( $( '#postycal-cpt-plural' ).val() ),
+                slug:         slug,
+                description:  $( '#postycal-cpt-description' ).val(),
+                has_archive:  $( '#postycal-cpt-has-archive' ).is( ':checked' ) ? '1' : '',
+                show_in_rest: $( '#postycal-cpt-show-in-rest' ).is( ':checked' ) ? '1' : '',
+                supports:     supports,
+                menu_icon:    $( '#postycal-cpt-menu-icon' ).val()
             } )
             .done( function( r ) {
                 if ( r.success ) {
                     self.postTypes = r.data.postTypes;
-                    self.taxCache  = {};   // invalidate taxonomy cache
+                    self.taxCache  = {};
                     self.refreshPostTypesTable();
                     self.closeModal( '#postycal-cpt-modal' );
                     self.showNotice( 'success', r.data.message );
                 } else {
-                    self.showNotice( 'error', r.data.message || self.config.i18n.saveError );
+                    self.showModalError( '#postycal-cpt-modal', r.data.message || self.config.i18n.saveError );
                 }
             } )
-            .fail( function() { self.showNotice( 'error', self.config.i18n.saveError ); } )
+            .fail( function() { self.showModalError( '#postycal-cpt-modal', self.config.i18n.saveError ); } )
             .always( function() { self.setLoading( $btn, false ); } );
         },
 
@@ -452,20 +468,10 @@
             const $btn = $( e.currentTarget );
             this.setLoading( $btn, true );
 
-            $.post( this.config.ajaxUrl, {
-                action: 'postycal_delete_post_type',
-                nonce:  this.config.nonce,
-                index:  $btn.data( 'index' )
-            } )
+            $.post( this.config.ajaxUrl, { action: 'postycal_delete_post_type', nonce: this.config.nonce, index: $btn.data( 'index' ) } )
             .done( function( r ) {
-                if ( r.success ) {
-                    self.postTypes = r.data.postTypes;
-                    self.taxCache  = {};
-                    self.refreshPostTypesTable();
-                    self.showNotice( 'success', r.data.message );
-                } else {
-                    self.showNotice( 'error', r.data.message || self.config.i18n.deleteError );
-                }
+                if ( r.success ) { self.postTypes = r.data.postTypes; self.taxCache = {}; self.refreshPostTypesTable(); self.showNotice( 'success', r.data.message ); }
+                else { self.showNotice( 'error', r.data.message || self.config.i18n.deleteError ); }
             } )
             .fail( function() { self.showNotice( 'error', self.config.i18n.deleteError ); } )
             .always( function() { self.setLoading( $btn, false ); } );
@@ -475,8 +481,7 @@
         // Taxonomy modal
         // -----------------------------------------------------------------
 
-        openTaxAdd: function( e ) {
-            e.preventDefault();
+        openTaxAdd: function() {
             this.resetTaxForm( true );
             $( '#postycal-tax-modal-title' ).text( this.config.i18n.addTaxonomy );
             $( '#postycal-tax-slug' ).removeData( 'manual' );
@@ -486,7 +491,7 @@
 
         openTaxEdit: function( e ) {
             e.preventDefault();
-            const index = $( e.currentTarget ).data( 'index' );
+            const index = parseInt( $( e.currentTarget ).data( 'index' ), 10 );
             const tax   = this.taxonomies[ index ];
             if ( ! tax ) return;
 
@@ -512,46 +517,70 @@
             $( '#postycal-tax-form' )[ 0 ].reset();
             $( '#postycal-tax-index' ).val( '' );
             $( '#postycal-tax-show-in-rest' ).prop( 'checked', true );
-            // Show seed terms only when creating new taxonomy.
-            $( '#postycal-tax-seed-row' ).toggle( isNew );
+            $( '#postycal-tax-post-types input[type="checkbox"]' ).prop( 'checked', false );
+            this.clearModalError( '#postycal-tax-modal .postycal-modal-error' );
+            // Seed terms section only shown for new taxonomies.
+            if ( isNew ) {
+                $( '#postycal-tax-seed-row' ).show();
+            } else {
+                $( '#postycal-tax-seed-row' ).hide();
+            }
         },
 
         submitTax: function( e ) {
             e.preventDefault();
-            const self       = this;
-            const $btn       = $( '#postycal-tax-form button[type="submit"]' );
+            const self = this;
+            const $btn = $( '#postycal-tax-form button[type="submit"]' );
+            const name = $.trim( $( '#postycal-tax-name' ).val() );
+            const slug = $.trim( $( '#postycal-tax-slug' ).val() );
+
+            this.clearModalError( '#postycal-tax-modal .postycal-modal-error' );
+
+            // JS-side validation.
+            if ( ! name ) { this.showModalError( '#postycal-tax-modal', 'Name is required.' ); return; }
+            if ( ! slug ) { this.showModalError( '#postycal-tax-modal', 'Slug is required.' ); return; }
+            if ( ! /^[a-z0-9_]{1,32}$/.test( slug ) ) {
+                this.showModalError( '#postycal-tax-modal', 'Slug must be lowercase letters, numbers, and underscores only (max 32 characters).' );
+                return;
+            }
+
             const post_types = [];
             $( '#postycal-tax-post-types input:checked' ).each( function() { post_types.push( $( this ).val() ); } );
+
+            if ( ! post_types.length ) {
+                this.showModalError( '#postycal-tax-modal', 'Please select at least one post type to assign this taxonomy to.' );
+                return;
+            }
 
             this.setLoading( $btn, true );
 
             $.post( this.config.ajaxUrl, {
-                action:          'postycal_save_taxonomy',
-                nonce:           this.config.nonce,
-                index:           $( '#postycal-tax-index' ).val(),
-                name:            $( '#postycal-tax-name' ).val(),
-                plural:          $( '#postycal-tax-plural' ).val(),
-                slug:            $( '#postycal-tax-slug' ).val(),
-                hierarchical:    $( '#postycal-tax-hierarchical' ).is( ':checked' ) ? '1' : '',
-                show_in_rest:    $( '#postycal-tax-show-in-rest' ).is( ':checked' ) ? '1' : '',
-                post_types:      post_types,
-                seed_upcoming:   $( '[name="seed_upcoming"]' ).val(),
-                seed_active:     $( '[name="seed_active"]' ).val(),
-                seed_past:       $( '[name="seed_past"]' ).val()
+                action:       'postycal_save_taxonomy',
+                nonce:        this.config.nonce,
+                index:        $( '#postycal-tax-index' ).val(),
+                name:         name,
+                plural:       $.trim( $( '#postycal-tax-plural' ).val() ),
+                slug:         slug,
+                hierarchical: $( '#postycal-tax-hierarchical' ).is( ':checked' ) ? '1' : '',
+                show_in_rest: $( '#postycal-tax-show-in-rest' ).is( ':checked' ) ? '1' : '',
+                post_types:   post_types,
+                seed_upcoming: $( '[name="seed_upcoming"]' ).val(),
+                seed_active:   $( '[name="seed_active"]' ).val(),
+                seed_past:     $( '[name="seed_past"]' ).val()
             } )
             .done( function( r ) {
                 if ( r.success ) {
                     self.taxonomies  = r.data.taxonomies;
-                    self.taxCache    = {};    // invalidate — post type now has new taxonomy
-                    self.termsCache  = {};    // seed terms may have been created
+                    self.taxCache    = {};
+                    self.termsCache  = {};
                     self.refreshTaxonomiesTable();
                     self.closeModal( '#postycal-tax-modal' );
                     self.showNotice( 'success', r.data.message );
                 } else {
-                    self.showNotice( 'error', r.data.message || self.config.i18n.saveError );
+                    self.showModalError( '#postycal-tax-modal', r.data.message || self.config.i18n.saveError );
                 }
             } )
-            .fail( function() { self.showNotice( 'error', self.config.i18n.saveError ); } )
+            .fail( function() { self.showModalError( '#postycal-tax-modal', self.config.i18n.saveError ); } )
             .always( function() { self.setLoading( $btn, false ); } );
         },
 
@@ -562,32 +591,21 @@
             const $btn = $( e.currentTarget );
             this.setLoading( $btn, true );
 
-            $.post( this.config.ajaxUrl, {
-                action: 'postycal_delete_taxonomy',
-                nonce:  this.config.nonce,
-                index:  $btn.data( 'index' )
-            } )
+            $.post( this.config.ajaxUrl, { action: 'postycal_delete_taxonomy', nonce: this.config.nonce, index: $btn.data( 'index' ) } )
             .done( function( r ) {
-                if ( r.success ) {
-                    self.taxonomies = r.data.taxonomies;
-                    self.taxCache   = {};
-                    self.termsCache = {};
-                    self.refreshTaxonomiesTable();
-                    self.showNotice( 'success', r.data.message );
-                } else {
-                    self.showNotice( 'error', r.data.message || self.config.i18n.deleteError );
-                }
+                if ( r.success ) { self.taxonomies = r.data.taxonomies; self.taxCache = {}; self.termsCache = {}; self.refreshTaxonomiesTable(); self.showNotice( 'success', r.data.message ); }
+                else { self.showNotice( 'error', r.data.message || self.config.i18n.deleteError ); }
             } )
             .fail( function() { self.showNotice( 'error', self.config.i18n.deleteError ); } )
             .always( function() { self.setLoading( $btn, false ); } );
         },
 
         // -----------------------------------------------------------------
-        // Table refresh helpers
+        // Table refresh
         // -----------------------------------------------------------------
 
         refreshSchedulesTable: function() {
-            const self  = this;
+            const self   = this;
             const $tbody = $( '#postycal-schedules-table tbody' );
             $tbody.empty();
 
@@ -596,23 +614,19 @@
                 $( '#postycal-trigger-cron' ).hide();
                 return;
             }
-
             $( '#postycal-trigger-cron' ).show();
-
             this.schedules.forEach( function( s, i ) {
-                const timeLabel = s.use_time ? ' (time-aware)' : '';
+                const t = s.use_time ? ' (time-aware)' : '';
                 $tbody.append(
                     '<tr data-index="' + i + '">' +
-                        '<td>' + self.escapeHtml( s.name ) + '</td>' +
-                        '<td>' + self.escapeHtml( s.post_type ) + '</td>' +
-                        '<td>' + self.escapeHtml( s.taxonomy + timeLabel ) + '</td>' +
-                        '<td>' + self.escapeHtml( s.upcoming_term ) + '</td>' +
-                        '<td>' + self.escapeHtml( s.active_term ) + '</td>' +
-                        '<td>' + self.escapeHtml( s.past_term ) + '</td>' +
-                        '<td>' +
-                            '<button type="button" class="button postycal-edit-schedule" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.editButton ) + '</button> ' +
-                            '<button type="button" class="button postycal-delete-schedule" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.deleteButton ) + '</button>' +
-                        '</td>' +
+                    '<td>' + self.escapeHtml( s.name ) + '</td>' +
+                    '<td>' + self.escapeHtml( s.post_type ) + '</td>' +
+                    '<td>' + self.escapeHtml( s.taxonomy + t ) + '</td>' +
+                    '<td>' + self.escapeHtml( s.upcoming_term ) + '</td>' +
+                    '<td>' + self.escapeHtml( s.active_term ) + '</td>' +
+                    '<td>' + self.escapeHtml( s.past_term ) + '</td>' +
+                    '<td><button type="button" class="button postycal-edit-schedule" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.editButton ) + '</button> ' +
+                    '<button type="button" class="button postycal-delete-schedule" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.deleteButton ) + '</button></td>' +
                     '</tr>'
                 );
             } );
@@ -627,19 +641,16 @@
                 $tbody.append( '<tr class="no-items"><td colspan="6">' + this.escapeHtml( this.config.i18n.noPostTypes ) + '</td></tr>' );
                 return;
             }
-
             this.postTypes.forEach( function( pt, i ) {
                 $tbody.append(
                     '<tr data-index="' + i + '">' +
-                        '<td>' + self.escapeHtml( pt.name ) + ' <span class="description">(' + self.escapeHtml( pt.plural ) + ')</span></td>' +
-                        '<td><code>' + self.escapeHtml( pt.slug ) + '</code></td>' +
-                        '<td>' + self.escapeHtml( ( pt.supports || [] ).join( ', ' ) ) + '</td>' +
-                        '<td>' + ( pt.has_archive ? '✓' : '—' ) + '</td>' +
-                        '<td>' + ( pt.show_in_rest !== false ? '✓' : '—' ) + '</td>' +
-                        '<td>' +
-                            '<button type="button" class="button postycal-edit-post-type" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.editButton ) + '</button> ' +
-                            '<button type="button" class="button postycal-delete-post-type" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.deleteButton ) + '</button>' +
-                        '</td>' +
+                    '<td>' + self.escapeHtml( pt.name ) + ' <span class="description">(' + self.escapeHtml( pt.plural ) + ')</span></td>' +
+                    '<td><code>' + self.escapeHtml( pt.slug ) + '</code></td>' +
+                    '<td>' + self.escapeHtml( ( pt.supports || [] ).join( ', ' ) ) + '</td>' +
+                    '<td>' + ( pt.has_archive ? '&#10003;' : '&mdash;' ) + '</td>' +
+                    '<td>' + ( pt.show_in_rest !== false ? '&#10003;' : '&mdash;' ) + '</td>' +
+                    '<td><button type="button" class="button postycal-edit-post-type" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.editButton ) + '</button> ' +
+                    '<button type="button" class="button postycal-delete-post-type" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.deleteButton ) + '</button></td>' +
                     '</tr>'
                 );
             } );
@@ -654,63 +665,51 @@
                 $tbody.append( '<tr class="no-items"><td colspan="6">' + this.escapeHtml( this.config.i18n.noTaxonomies ) + '</td></tr>' );
                 return;
             }
-
             this.taxonomies.forEach( function( t, i ) {
                 $tbody.append(
                     '<tr data-index="' + i + '">' +
-                        '<td>' + self.escapeHtml( t.name ) + '</td>' +
-                        '<td><code>' + self.escapeHtml( t.slug ) + '</code></td>' +
-                        '<td>' + self.escapeHtml( ( t.post_types || [] ).join( ', ' ) ) + '</td>' +
-                        '<td>' + ( t.hierarchical ? '✓' : '—' ) + '</td>' +
-                        '<td>' + ( t.show_in_rest !== false ? '✓' : '—' ) + '</td>' +
-                        '<td>' +
-                            '<button type="button" class="button postycal-edit-taxonomy" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.editButton ) + '</button> ' +
-                            '<button type="button" class="button postycal-delete-taxonomy" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.deleteButton ) + '</button>' +
-                        '</td>' +
+                    '<td>' + self.escapeHtml( t.name ) + '</td>' +
+                    '<td><code>' + self.escapeHtml( t.slug ) + '</code></td>' +
+                    '<td>' + self.escapeHtml( ( t.post_types || [] ).join( ', ' ) ) + '</td>' +
+                    '<td>' + ( t.hierarchical ? '&#10003;' : '&mdash;' ) + '</td>' +
+                    '<td>' + ( t.show_in_rest !== false ? '&#10003;' : '&mdash;' ) + '</td>' +
+                    '<td><button type="button" class="button postycal-edit-taxonomy" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.editButton ) + '</button> ' +
+                    '<button type="button" class="button postycal-delete-taxonomy" data-index="' + i + '">' + self.escapeHtml( self.config.i18n.deleteButton ) + '</button></td>' +
                     '</tr>'
                 );
             } );
         },
 
         // -----------------------------------------------------------------
-        // Notices & loading state
+        // Notices
         // -----------------------------------------------------------------
 
         showNotice: function( type, message ) {
             $( '.postycal-notice' ).remove();
-
-            const $notice = $(
+            const $n = $(
                 '<div class="notice notice-' + type + ' is-dismissible postycal-notice">' +
-                    '<p>' + this.escapeHtml( message ) + '</p>' +
-                    '<button type="button" class="notice-dismiss"><span class="screen-reader-text">Dismiss</span></button>' +
+                '<p>' + this.escapeHtml( message ) + '</p>' +
+                '<button type="button" class="notice-dismiss"><span class="screen-reader-text">Dismiss</span></button>' +
                 '</div>'
             );
-
-            $( '.wrap.postycal-settings h1' ).after( $notice );
-
-            setTimeout( function() { $notice.fadeOut( 300, function() { $( this ).remove(); } ); }, 5000 );
-            $notice.find( '.notice-dismiss' ).on( 'click', function() {
-                $( this ).closest( '.postycal-notice' ).fadeOut( 300, function() { $( this ).remove(); } );
-            } );
+            $( '.wrap.postycal-settings h1' ).after( $n );
+            setTimeout( function() { $n.fadeOut( 300, function() { $( this ).remove(); } ); }, 5000 );
+            $n.find( '.notice-dismiss' ).on( 'click', function() { $( this ).closest( '.postycal-notice' ).remove(); } );
         },
 
         setLoading: function( $btn, loading ) {
             if ( loading ) {
-                $btn.data( 'orig-text', $btn.text() ).prop( 'disabled', true ).text( this.config.i18n.processing );
+                $btn.data( 'orig', $btn.text() ).prop( 'disabled', true ).text( this.config.i18n.processing );
             } else {
-                $btn.prop( 'disabled', false ).text( $btn.data( 'orig-text' ) || $btn.text() );
+                $btn.prop( 'disabled', false ).text( $btn.data( 'orig' ) || $btn.text() );
             }
         },
 
-        // -----------------------------------------------------------------
-        // Utility
-        // -----------------------------------------------------------------
-
         escapeHtml: function( str ) {
             if ( ! str && str !== 0 ) return '';
-            const div = document.createElement( 'div' );
-            div.appendChild( document.createTextNode( String( str ) ) );
-            return div.innerHTML;
+            const d = document.createElement( 'div' );
+            d.appendChild( document.createTextNode( String( str ) ) );
+            return d.innerHTML;
         }
     };
 

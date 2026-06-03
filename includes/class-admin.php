@@ -181,15 +181,15 @@ class Admin {
             <h1><?php echo esc_html( get_admin_page_title() ); ?></h1>
 
             <nav class="nav-tab-wrapper postycal-tab-nav">
-                <a href="#" class="nav-tab nav-tab-active" data-tab="schedules">
+                <button type="button" class="nav-tab nav-tab-active postycal-tab-btn" data-tab="schedules">
                     <?php esc_html_e( 'Schedules', 'postycal' ); ?>
-                </a>
-                <a href="#" class="nav-tab" data-tab="post-types">
+                </button>
+                <button type="button" class="nav-tab postycal-tab-btn" data-tab="post-types">
                     <?php esc_html_e( 'Post Types', 'postycal' ); ?>
-                </a>
-                <a href="#" class="nav-tab" data-tab="taxonomies">
+                </button>
+                <button type="button" class="nav-tab postycal-tab-btn" data-tab="taxonomies">
                     <?php esc_html_e( 'Taxonomies', 'postycal' ); ?>
-                </a>
+                </button>
             </nav>
 
             <?php /* ---- SCHEDULES TAB ---- */ ?>
@@ -319,7 +319,8 @@ class Admin {
             <div class="postycal-modal-backdrop"></div>
             <div class="postycal-modal-content">
                 <h2 id="postycal-modal-title"><?php esc_html_e( 'Add New Schedule', 'postycal' ); ?></h2>
-                <form id="postycal-schedule-form">
+                <div class="postycal-modal-error notice notice-error" style="display:none;"><p></p></div>
+                <form id="postycal-schedule-form" novalidate>
                     <input type="hidden" id="postycal-schedule-index" name="index" value="">
                     <table class="form-table">
                         <tr>
@@ -450,7 +451,8 @@ class Admin {
             <div class="postycal-modal-backdrop"></div>
             <div class="postycal-modal-content">
                 <h2 id="postycal-cpt-modal-title"><?php esc_html_e( 'Add New Post Type', 'postycal' ); ?></h2>
-                <form id="postycal-cpt-form">
+                <div class="postycal-modal-error notice notice-error" style="display:none;"><p></p></div>
+                <form id="postycal-cpt-form" novalidate>
                     <input type="hidden" id="postycal-cpt-index" name="index" value="">
                     <table class="form-table">
                         <tr>
@@ -512,7 +514,7 @@ class Admin {
                     </table>
                     <p class="submit">
                         <button type="submit" class="button button-primary"><?php esc_html_e( 'Save Post Type', 'postycal' ); ?></button>
-                        <button type="button" class="button postycal-cpt-cancel"><?php esc_html_e( 'Cancel', 'postycal' ); ?></button>
+                        <button type="button" class="button" id="postycal-cpt-cancel"><?php esc_html_e( 'Cancel', 'postycal' ); ?></button>
                     </p>
                 </form>
             </div>
@@ -569,7 +571,8 @@ class Admin {
             <div class="postycal-modal-backdrop"></div>
             <div class="postycal-modal-content">
                 <h2 id="postycal-tax-modal-title"><?php esc_html_e( 'Add New Taxonomy', 'postycal' ); ?></h2>
-                <form id="postycal-tax-form">
+                <div class="postycal-modal-error notice notice-error" style="display:none;"><p></p></div>
+                <form id="postycal-tax-form" novalidate>
                     <input type="hidden" id="postycal-tax-index" name="index" value="">
                     <table class="form-table">
                         <tr>
@@ -592,7 +595,7 @@ class Admin {
                             </td>
                         </tr>
                         <tr>
-                            <th><?php esc_html_e( 'Assign to Post Types', 'postycal' ); ?></th>
+                            <th><?php esc_html_e( 'Assign to Post Types', 'postycal' ); ?> <span style="color:#d63638;">*</span></th>
                             <td>
                                 <fieldset id="postycal-tax-post-types">
                                     <?php foreach ( get_post_types( [ 'public' => true ], 'objects' ) as $pt ) : ?>
@@ -602,7 +605,7 @@ class Admin {
                                         </label><br>
                                     <?php endforeach; ?>
                                 </fieldset>
-                                <p class="description"><?php esc_html_e( 'Select one or more post types to attach this taxonomy to.', 'postycal' ); ?></p>
+                                <p class="description"><?php esc_html_e( 'Required. Select one or more post types to attach this taxonomy to.', 'postycal' ); ?></p>
                             </td>
                         </tr>
                         <tr>
@@ -630,7 +633,7 @@ class Admin {
                     </table>
                     <p class="submit">
                         <button type="submit" class="button button-primary"><?php esc_html_e( 'Save Taxonomy', 'postycal' ); ?></button>
-                        <button type="button" class="button postycal-tax-cancel"><?php esc_html_e( 'Cancel', 'postycal' ); ?></button>
+                        <button type="button" class="button" id="postycal-tax-cancel"><?php esc_html_e( 'Cancel', 'postycal' ); ?></button>
                     </p>
                 </form>
             </div>
