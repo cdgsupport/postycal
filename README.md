@@ -126,6 +126,27 @@ Logs are written to `wp-content/debug.log`. Errors and warnings are logged whene
 
 Deleting the plugin through WordPress removes all schedule, post type, and taxonomy configurations, PostyCal's date meta, and the scheduled event — on every site in a multisite network. Posts, taxonomies, and terms are left in place, since they hold your content.
 
+## Releasing
+
+Releases are built and published by GitHub Actions when a `v*` tag is pushed.
+
+```bash
+bin/bump-version.sh 2.3.0     # sets the version in postycal.php and README.md
+# add a "### 2.3.0" entry to the changelog below, then commit
+git tag v2.3.0
+git push origin main v2.3.0
+```
+
+The workflow lints, builds `postycal-2.3.0.zip`, and publishes it as a GitHub Release with the notes taken from that version's changelog entry. The zip contains a single `postycal/` directory and is installable through **Plugins → Add New → Upload Plugin**.
+
+The build **fails rather than publishes** if the tag and the versions declared in `postycal.php` and `README.md` disagree. Versions are read from the tagged commit, not your working tree, so an uncommitted bump can't ship a mislabelled zip.
+
+To build a zip locally without releasing:
+
+```bash
+bin/build-release.sh
+```
+
 ## Changelog
 
 ### 2.2.0
