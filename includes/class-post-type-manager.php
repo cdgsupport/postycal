@@ -39,6 +39,17 @@ class Post_Type_Manager {
      */
     private ?array $post_types = null;
 
+    /**
+     * Slugs registered with WordPress during this request.
+     *
+     * Lets callers tell a PostyCal-owned post type apart from a core or
+     * third-party one — needed because a definition deleted mid-request is
+     * still registered until the next page load.
+     *
+     * @var string[]
+     */
+    private array $registered_slugs = [];
+
     // -------------------------------------------------------------------------
     // Registration
     // -------------------------------------------------------------------------
@@ -56,7 +67,18 @@ class Post_Type_Manager {
             if ( ! post_type_exists( $post_type->slug ) ) {
                 register_post_type( $post_type->slug, $post_type->get_registration_args() );
             }
+
+            $this->registered_slugs[] = $post_type->slug;
         }
+    }
+
+    /**
+     * Get the slugs PostyCal registered during this request.
+     *
+     * @return string[]
+     */
+    public function get_registered_slugs(): array {
+        return $this->registered_slugs;
     }
 
     // -------------------------------------------------------------------------
@@ -130,6 +152,11 @@ class Post_Type_Manager {
             Logger::error( 'Attempted to update non-existent post type', [ 'index' => $index ] );
             return false;
         }
+
+        // The slug is the database key for every post of this type — changing
+        // it would orphan them all. Preserve the stored slug regardless of
+        // what was submitted (the edit form also renders it read-only).
+        $data['slug'] = $all[ $index ]->slug;
 
         $post_type = new Post_Type( $data );
 

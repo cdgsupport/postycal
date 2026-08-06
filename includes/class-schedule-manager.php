@@ -91,7 +91,7 @@ class Schedule_Manager {
         $new_index   = count( $schedules ) - 1;
 
         if ( $this->save_schedules( $schedules ) ) {
-            $this->maybe_schedule_cron();
+            $this->sync_cron();
             return $new_index;
         }
 
@@ -122,7 +122,15 @@ class Schedule_Manager {
 
         $schedules[ $index ] = $schedule;
 
-        return $this->save_schedules( $schedules );
+        if ( ! $this->save_schedules( $schedules ) ) {
+            return false;
+        }
+
+        // The recurrence depends on whether any schedule is time-aware, which
+        // an update can change in either direction.
+        $this->sync_cron();
+
+        return true;
     }
 
     /**
@@ -143,8 +151,8 @@ class Schedule_Manager {
 
         $result = $this->save_schedules( $schedules );
 
-        if ( $result && empty( $schedules ) ) {
-            wp_clear_scheduled_hook( 'pc_daily_category_check' );
+        if ( $result ) {
+            $this->sync_cron();
         }
 
         return $result;
@@ -272,14 +280,55 @@ class Schedule_Manager {
     }
 
     /**
-     * Ensure cron is scheduled if we have schedules.
+     * Check whether any schedule uses time-aware comparisons.
+     *
+     * @return bool
+     */
+    public function has_time_aware(): bool {
+        foreach ( $this->get_all() as $schedule ) {
+            if ( $schedule->use_time ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Reconcile the recurring cron event with the current schedules.
+     *
+     * Clears the event when no schedules remain, and otherwise ensures the
+     * event exists at the correct recurrence: hourly when any schedule is
+     * time-aware (a daily midnight run cannot honour a configured time of
+     * day), daily at local midnight otherwise. Also repairs the event if it
+     * has gone missing or is registered at the wrong recurrence.
      *
      * @return void
      */
-    private function maybe_schedule_cron(): void {
-        if ( $this->has_schedules() && ! wp_next_scheduled( 'pc_daily_category_check' ) ) {
-            wp_schedule_event( postycal_next_midnight(), 'daily', 'pc_daily_category_check' );
+    public function sync_cron(): void {
+        $hook = POSTYCAL_CRON_HOOK;
+
+        if ( ! $this->has_schedules() ) {
+            wp_clear_scheduled_hook( $hook );
+            return;
         }
+
+        $recurrence = $this->has_time_aware() ? 'hourly' : 'daily';
+        $existing   = wp_get_scheduled_event( $hook );
+
+        if ( false !== $existing && $existing->schedule === $recurrence ) {
+            return;
+        }
+
+        if ( false !== $existing ) {
+            wp_clear_scheduled_hook( $hook );
+        }
+
+        $next = 'hourly' === $recurrence ? postycal_next_hour() : postycal_next_midnight();
+
+        wp_schedule_event( $next, $recurrence, $hook );
+
+        Logger::info( 'Synced transition cron', [ 'recurrence' => $recurrence, 'next_run' => $next ] );
     }
 
     /**
@@ -325,7 +374,7 @@ class Schedule_Manager {
 
         if ( $imported > 0 ) {
             $this->save_schedules( $schedules );
-            $this->maybe_schedule_cron();
+            $this->sync_cron();
         }
 
         return $imported;

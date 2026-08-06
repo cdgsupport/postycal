@@ -5,14 +5,20 @@
  * Handles scheduled tasks and post lifecycle transitions.
  *
  * Transition rules:
- *   - Draft/pending posts in the upcoming term whose go-live date has passed
- *     are published and moved to the active term.
+ *   - Posts in the upcoming term whose go-live date has arrived (inclusive —
+ *     a go-live date of today counts) are published and moved to the active
+ *     term, and stamped with the go-live date as their post date.
  *   - Published posts in the active term whose expiration date has passed
- *     are set to private and moved to the past term.
+ *     are set to private and moved to the past term. Expiration is exclusive,
+ *     so a post stays live for the whole of its expiration day.
  *
  * On manual post save, the correct term is set immediately based on the
  * current date vs the stored dates. Post status changes are deferred to
  * the cron so editors retain control during the current editing session.
+ *
+ * Any post can opt out of the date-driven rules with a per-post override
+ * (see the Override class): either held entirely untouched, or pinned to a
+ * specific lifecycle state regardless of its dates.
  *
  * @package PostyCal
  * @since 2.0.0
@@ -94,41 +100,56 @@ class Cron_Handler {
 
         $published = $this->process_go_live_transitions( $schedule );
         $expired   = $this->process_expiry_transitions( $schedule );
+        $pinned    = $this->process_overrides( $schedule );
 
-        if ( $published > 0 || $expired > 0 ) {
+        if ( $published > 0 || $expired > 0 || $pinned > 0 ) {
             Logger::info(
                 'Processed schedule transitions',
-                [ 'schedule' => $schedule->name, 'published' => $published, 'expired' => $expired ]
+                [
+                    'schedule'  => $schedule->name,
+                    'published' => $published,
+                    'expired'   => $expired,
+                    'pinned'    => $pinned,
+                ]
             );
         }
     }
 
     /**
-     * Publish draft posts whose go-live date has passed.
+     * Publish posts whose go-live date has arrived.
      *
      * Also handles the edge case where both dates have already passed
      * (goes directly to the expired state).
      *
      * @param Schedule $schedule The schedule.
-     * @return int Number of posts transitioned.
+     * @return int Number of posts actually transitioned.
      */
     private function process_go_live_transitions( Schedule $schedule ): int {
+        // 'publish' is included deliberately: an editor who publishes a post
+        // manually before its go-live date leaves it published but still in
+        // the upcoming term, and it would otherwise never be picked up by
+        // either pass again. Posts already in their correct state are no-ops.
         $posts = $this->get_posts_by_terms(
             $schedule,
             [ $schedule->upcoming_term, $schedule->active_term ],
-            [ 'draft', 'pending' ]
+            [ 'draft', 'pending', 'publish' ]
         );
 
         $count = 0;
 
         foreach ( $posts as $post ) {
+            if ( ! Override::is_automatic( $this->get_override( $post->ID, $schedule ) ) ) {
+                continue;
+            }
+
             $go_live = Date_Handler::get_go_live_date( $post->ID, $schedule );
 
             if ( null === $go_live ) {
                 continue;
             }
 
-            if ( ! Date_Handler::is_date_past( $go_live, null, $schedule->use_time ) ) {
+            // Inclusive: a post whose go-live date is *today* has arrived.
+            if ( ! Date_Handler::is_date_reached( $go_live, null, $schedule->use_time ) ) {
                 continue;
             }
 
@@ -136,12 +157,14 @@ class Cron_Handler {
 
             if ( null !== $expiration && Date_Handler::is_date_past( $expiration, null, $schedule->use_time ) ) {
                 // Both dates passed — expire directly without going through active.
-                $this->apply_expiry( $post->ID, $schedule );
+                $changed = $this->apply_expiry( $post->ID, $schedule );
             } else {
-                $this->apply_go_live( $post->ID, $schedule );
+                $changed = $this->apply_go_live( $post->ID, $schedule, $go_live );
             }
 
-            ++$count;
+            if ( $changed ) {
+                ++$count;
+            }
         }
 
         return $count;
@@ -163,6 +186,10 @@ class Cron_Handler {
         $count = 0;
 
         foreach ( $posts as $post ) {
+            if ( ! Override::is_automatic( $this->get_override( $post->ID, $schedule ) ) ) {
+                continue;
+            }
+
             $expiration = Date_Handler::get_expiration_date( $post->ID, $schedule );
 
             if ( null === $expiration ) {
@@ -173,7 +200,72 @@ class Cron_Handler {
                 continue;
             }
 
-            $this->apply_expiry( $post->ID, $schedule );
+            if ( $this->apply_expiry( $post->ID, $schedule ) ) {
+                ++$count;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Reconcile posts pinned to a state by a per-post override.
+     *
+     * These posts are skipped by the date-driven passes, so they need their
+     * own query — a pinned post is not necessarily in any of the terms those
+     * passes look at. Posts set to HOLD are never matched here, which is the
+     * whole point of that value.
+     *
+     * @param Schedule $schedule The schedule.
+     * @return int Number of posts actually changed.
+     */
+    private function process_overrides( Schedule $schedule ): int {
+        // Unlike the other passes this one is meta-driven, not term-driven, so
+        // a broken taxonomy would not stop it finding posts and changing their
+        // status. Bail explicitly.
+        if ( ! $schedule->taxonomy_exists() ) {
+            return 0;
+        }
+
+        $query = new \WP_Query(
+            [
+                'post_type'      => $schedule->post_type,
+                'post_status'    => 'any',
+                'posts_per_page' => -1,
+                'no_found_rows'  => true,
+                'meta_query'     => [
+                    [
+                        'key'     => $schedule->get_override_meta_key(),
+                        'value'   => Override::pinned_values(),
+                        'compare' => 'IN',
+                    ],
+                ],
+            ]
+        );
+
+        $count = 0;
+
+        foreach ( $query->posts as $post ) {
+            $override = $this->get_override( $post->ID, $schedule );
+            $term     = Override::term_for( $override, $schedule );
+            $status   = Override::status_for( $override );
+
+            if ( null === $term || null === $status ) {
+                continue;
+            }
+
+            $term_changed   = $this->set_post_term( $post->ID, $schedule, $term );
+            $status_changed = $this->update_post_status( $post->ID, $status );
+
+            if ( ! $term_changed && ! $status_changed ) {
+                continue;
+            }
+
+            Logger::info(
+                'Applied schedule override',
+                [ 'post_id' => $post->ID, 'schedule' => $schedule->name, 'override' => $override ]
+            );
+
             ++$count;
         }
 
@@ -233,7 +325,7 @@ class Cron_Handler {
     /**
      * Run all schedule transitions immediately (admin manual trigger).
      *
-     * @return array<string, array{published: int, expired: int}> Results keyed by schedule name.
+     * @return array<string, array{published: int, expired: int, pinned: int}> Results keyed by schedule name.
      */
     public function trigger_manual_run(): array {
         $results   = [];
@@ -245,6 +337,7 @@ class Cron_Handler {
             $results[ $schedule->name ] = [
                 'published' => $this->process_go_live_transitions( $schedule ),
                 'expired'   => $this->process_expiry_transitions( $schedule ),
+                'pinned'    => $this->process_overrides( $schedule ),
             ];
         }
 
@@ -260,15 +353,22 @@ class Cron_Handler {
     /**
      * Publish a post and assign the active term.
      *
-     * @param int      $post_id  The post ID.
-     * @param Schedule $schedule The schedule.
-     * @return void
+     * @param int                     $post_id  The post ID.
+     * @param Schedule                $schedule The schedule.
+     * @param \DateTimeImmutable|null $go_live  Go-live date, stamped as the post date on publish.
+     * @return bool True if anything actually changed.
      */
-    private function apply_go_live( int $post_id, Schedule $schedule ): void {
-        $this->set_post_term( $post_id, $schedule, $schedule->active_term );
-        $this->update_post_status( $post_id, 'publish' );
+    private function apply_go_live( int $post_id, Schedule $schedule, ?\DateTimeImmutable $go_live = null ): bool {
+        $term_changed   = $this->set_post_term( $post_id, $schedule, $schedule->active_term );
+        $status_changed = $this->update_post_status( $post_id, 'publish', $go_live );
+
+        if ( ! $term_changed && ! $status_changed ) {
+            return false;
+        }
 
         Logger::info( 'Post published (go-live)', [ 'post_id' => $post_id, 'schedule' => $schedule->name ] );
+
+        return true;
     }
 
     /**
@@ -276,13 +376,19 @@ class Cron_Handler {
      *
      * @param int      $post_id  The post ID.
      * @param Schedule $schedule The schedule.
-     * @return void
+     * @return bool True if anything actually changed.
      */
-    private function apply_expiry( int $post_id, Schedule $schedule ): void {
-        $this->set_post_term( $post_id, $schedule, $schedule->past_term );
-        $this->update_post_status( $post_id, 'private' );
+    private function apply_expiry( int $post_id, Schedule $schedule ): bool {
+        $term_changed   = $this->set_post_term( $post_id, $schedule, $schedule->past_term );
+        $status_changed = $this->update_post_status( $post_id, 'private' );
+
+        if ( ! $term_changed && ! $status_changed ) {
+            return false;
+        }
 
         Logger::info( 'Post expired', [ 'post_id' => $post_id, 'schedule' => $schedule->name ] );
+
+        return true;
     }
 
     /**
@@ -299,23 +405,45 @@ class Cron_Handler {
             return;
         }
 
+        $override = $this->get_override( $post_id, $schedule );
+
+        if ( ! Override::is_automatic( $override ) ) {
+            // A pinned override still gets its term applied immediately, so
+            // the editor sees the effect of their choice on save. HOLD pins
+            // nothing and is left strictly alone. Status changes remain the
+            // scheduled run's job, as they are for automatic posts.
+            $term = Override::term_for( $override, $schedule );
+
+            if ( null !== $term ) {
+                $this->set_post_term( $post_id, $schedule, $term );
+            }
+
+            return;
+        }
+
         $go_live    = Date_Handler::get_go_live_date( $post_id, $schedule );
         $expiration = Date_Handler::get_expiration_date( $post_id, $schedule );
 
-        if ( null === $go_live || null === $expiration ) {
+        if ( null === $go_live && null === $expiration ) {
             Logger::debug(
-                'Skipping term assignment — dates not set',
+                'Skipping term assignment — no dates set',
                 [ 'post_id' => $post_id, 'schedule' => $schedule->name ]
             );
             return;
         }
 
-        $is_go_live_passed  = Date_Handler::is_date_past( $go_live, null, $schedule->use_time );
-        $is_expiry_passed   = Date_Handler::is_date_past( $expiration, null, $schedule->use_time );
+        // A single missing date must still produce a term, otherwise the post
+        // matches neither cron query and is invisible to the plugin forever.
+        // An absent go-live date means "no gate"; an absent expiration means
+        // "never expires".
+        $is_expiry_passed  = null !== $expiration
+            && Date_Handler::is_date_past( $expiration, null, $schedule->use_time );
+        $is_go_live_reached = null === $go_live
+            || Date_Handler::is_date_reached( $go_live, null, $schedule->use_time );
 
         if ( $is_expiry_passed ) {
             $term = $schedule->past_term;
-        } elseif ( $is_go_live_passed ) {
+        } elseif ( $is_go_live_reached ) {
             $term = $schedule->active_term;
         } else {
             $term = $schedule->upcoming_term;
@@ -336,6 +464,17 @@ class Cron_Handler {
     // -------------------------------------------------------------------------
     // Low-level helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Read a post's override for a given schedule.
+     *
+     * @param int      $post_id  The post ID.
+     * @param Schedule $schedule The schedule.
+     * @return string One of the Override constants.
+     */
+    private function get_override( int $post_id, Schedule $schedule ): string {
+        return Override::sanitize( get_post_meta( $post_id, $schedule->get_override_meta_key(), true ) );
+    }
 
     /**
      * Query posts matching specific taxonomy terms and post statuses.
@@ -371,7 +510,7 @@ class Cron_Handler {
      * @param int      $post_id  The post ID.
      * @param Schedule $schedule The schedule.
      * @param string   $term     Term slug to assign.
-     * @return bool True on success.
+     * @return bool True if the post's terms were actually changed.
      */
     private function set_post_term( int $post_id, Schedule $schedule, string $term ): bool {
         $term_obj = get_term_by( 'slug', $term, $schedule->taxonomy );
@@ -381,6 +520,14 @@ class Cron_Handler {
                 'Cannot assign term — term does not exist',
                 [ 'post_id' => $post_id, 'term' => $term, 'taxonomy' => $schedule->taxonomy ]
             );
+            return false;
+        }
+
+        // Skip the write when the post is already in exactly this term, so
+        // callers can distinguish a real transition from a no-op.
+        $current = wp_get_object_terms( $post_id, $schedule->taxonomy, [ 'fields' => 'slugs' ] );
+
+        if ( ! is_wp_error( $current ) && [ $term ] === $current ) {
             return false;
         }
 
@@ -400,17 +547,42 @@ class Cron_Handler {
     /**
      * Update post status without triggering re-entrant processing.
      *
-     * @param int    $post_id The post ID.
-     * @param string $status  Target post status ('publish' or 'private').
-     * @return void
+     * @param int                     $post_id      The post ID.
+     * @param string                  $status       Target post status ('publish' or 'private').
+     * @param \DateTimeImmutable|null $publish_date Post date to stamp on the post, if any.
+     * @return bool True if the status was actually changed.
      */
-    private function update_post_status( int $post_id, string $status ): void {
+    private function update_post_status( int $post_id, string $status, ?\DateTimeImmutable $publish_date = null ): bool {
         if ( get_post_status( $post_id ) === $status ) {
-            return;
+            return false;
+        }
+
+        $args = [
+            'ID'          => $post_id,
+            'post_status' => $status,
+        ];
+
+        // Without this the post keeps whatever date the draft was created on,
+        // and the editor UI for changing it is hidden while a schedule is
+        // active — so a post going live today would show a months-old date.
+        if ( null !== $publish_date ) {
+            $args['edit_date']     = true;
+            $args['post_date']     = $publish_date->setTimezone( Date_Handler::get_timezone() )->format( 'Y-m-d H:i:s' );
+            $args['post_date_gmt'] = $publish_date->setTimezone( new \DateTimeZone( 'UTC' ) )->format( 'Y-m-d H:i:s' );
         }
 
         $this->is_updating = true;
-        wp_update_post( [ 'ID' => $post_id, 'post_status' => $status ] );
+        $result            = wp_update_post( $args, true );
         $this->is_updating = false;
+
+        if ( is_wp_error( $result ) ) {
+            Logger::error(
+                'Failed to update post status',
+                [ 'post_id' => $post_id, 'status' => $status, 'error' => $result->get_error_message() ]
+            );
+            return false;
+        }
+
+        return true;
     }
 }

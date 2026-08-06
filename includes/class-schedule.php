@@ -122,6 +122,15 @@ class Schedule {
     }
 
     /**
+     * Get the post meta key for this schedule's per-post override.
+     *
+     * @return string
+     */
+    public function get_override_meta_key(): string {
+        return '_postycal_' . $this->schedule_key . '_override';
+    }
+
+    /**
      * Check if schedule configuration is complete.
      *
      * @return bool True if all required fields are present.

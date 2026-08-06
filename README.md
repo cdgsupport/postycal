@@ -1,138 +1,157 @@
 # PostyCal
 
-**Version:** 2.0.5  
+**Version:** 2.2.0  
 **Requires WordPress:** 6.0+  
 **Requires PHP:** 8.2+  
 **License:** GPL v3 or later
 
-Automatically manages post category transitions based on ACF date fields. Perfect for events, promotions, announcements, and any content that needs to move between "upcoming" and "past" categories.
+Manages the full lifecycle of time-sensitive posts. Give a post a go-live date and an expiration date, and PostyCal publishes it, moves it through a set of taxonomy terms, and retires it — automatically. Built for events, promotions, announcements, and alerts.
+
+No ACF required. PostyCal registers its own date fields, and can create the post types and taxonomies it needs.
 
 ## Features
 
-- **Automatic Category Transitions**: Posts automatically move from a "pre-date" category to a "post-date" category when their date passes
-- **Multiple Schedules**: Configure different transition rules for different post types
-- **ACF Repeater Support**: Works with both single date fields and repeater fields containing multiple dates
-- **Flexible Date Logic**: For repeaters, choose between earliest date, latest date, or "any date passed" logic
-- **Real-time Updates**: Category is assigned immediately when a post is saved
-- **Daily Cron**: Background process runs daily to catch any posts that need transitioning
-- **Manual Trigger**: Run all schedules on-demand from the admin panel
+- **Full lifecycle management**: draft → published → private, driven by two dates
+- **Three-term model**: posts carry an Upcoming, Active, or Past term at all times
+- **Built-in custom fields**: go-live and expiration date fields, no ACF or other dependency
+- **Post type & taxonomy builder**: create the CPTs and taxonomies from the settings page, with seed terms created for you
+- **Multiple schedules**: different rules for different post types, and more than one schedule per post type
+- **Time-aware transitions**: optionally compare exact times instead of whole days
+- **Immediate term assignment**: the correct term is applied the moment a post is saved
+- **Per-post overrides**: take any single post out of its schedule without touching the schedule itself
+- **Manual trigger**: run every schedule on demand from the settings page
 
 ## Requirements
 
 - WordPress 6.0 or higher
 - PHP 8.2 or higher
-- Advanced Custom Fields (ACF) or ACF Pro
 
 ## Installation
 
 1. Upload the `postycal` folder to `/wp-content/plugins/`
 2. Activate the plugin through the WordPress admin
-3. Navigate to **Settings → PostyCal** to configure schedules
+3. Navigate to **Settings → PostyCal**
 
-## Configuration
+## Setup
 
-### Creating a Schedule
+Work through the tabs in order: **Post Types → Taxonomies → Schedules**.
 
-1. Go to **Settings → PostyCal**
-2. Click **Add New Schedule**
-3. Configure the following:
+### 1. Post Types
+
+Create the post type your time-sensitive content lives in (or skip this if you'll use an existing one). The slug is fixed once created — it keys every post of that type.
+
+### 2. Taxonomies
+
+Create a taxonomy and assign it to one or more post types. On creation PostyCal seeds three terms (Upcoming, Active, Past by default; the names are yours to change) so the taxonomy is immediately usable by a schedule.
+
+### 3. Schedules
 
 | Field | Description |
 |-------|-------------|
 | **Schedule Name** | A descriptive name for this schedule |
-| **Post Type** | The post type to monitor (e.g., `event`, `post`) |
-| **Taxonomy** | The taxonomy to use for categorization |
-| **Field Type** | Single Date Field or Repeater Field |
-| **ACF Date Field Name** | The ACF field name containing the date |
-| **Date Sub-field Name** | (Repeaters only) The date field within the repeater |
-| **Date Logic** | (Repeaters only) How to handle multiple dates |
-| **Pre-Date Category Slug** | Term slug for future-dated posts |
-| **Post-Date Category Slug** | Term slug for past-dated posts |
-| **Time-Aware Transitions** | Enable to use time component (for Date/Time Picker fields) |
+| **Post Type** | The post type to monitor |
+| **Taxonomy** | The taxonomy holding the three lifecycle terms |
+| **Upcoming Term** | Assigned while the post is waiting for its go-live date |
+| **Active Term** | Assigned once the post is live |
+| **Past Term** | Assigned once the post has expired |
+| **Time-Aware** | Compare exact times rather than whole days |
 
-### Date Logic Options (Repeaters)
+Saving a schedule adds a **Publication Schedule** meta box to that post type's editor, with the go-live and expiration date fields.
 
-- **Use earliest date**: Transition based on the first date in the repeater
-- **Use latest date**: Transition based on the last date in the repeater  
-- **Transition when any date has passed**: Move to post-date category as soon as any date passes
+## How it works
 
-### Time-Aware Transitions
+1. **Before go-live** — the post stays a draft and holds the Upcoming term.
+2. **On the go-live date** — PostyCal publishes the post, assigns the Active term, and stamps the post date with the go-live date.
+3. **After the expiration date** — PostyCal sets the post to private and assigns the Past term.
 
-By default, PostyCal compares dates only and transitions posts at midnight (with a 24-hour buffer). This works well for ACF **Date Picker** fields.
+Dates are interpreted in the site's configured timezone (**Settings → General**), not the server's.
 
-When **Time-Aware Transitions** is enabled:
-- Posts transition immediately when the datetime passes
-- No buffer period is applied
-- Perfect for ACF **Date/Time Picker** fields
+**Day boundaries.** With Time-Aware off, a go-live date is *inclusive* — a post dated today goes live today. An expiration date is *exclusive* — a post stays live for the whole of its expiration day and retires at the end of it.
 
-**Use Cases for Time-Aware:**
-- Flash sales ending at a specific time (e.g., "Sale ends at 11:59 PM")
-- Webinars that should move to "past" right after they finish
-- Time-sensitive promotions
-- Events with specific start/end times
+**On save**, only the term is updated, never the post status. That keeps an editor in control of publishing during an editing session; status changes are left to the scheduled run.
 
-## How It Works
+**Scheduled runs** happen daily at local midnight. If any schedule is time-aware, the event automatically switches to hourly, since a midnight-only run cannot honour a configured time of day. The recurrence is reconciled whenever schedules change.
 
-1. **On Post Save**: When a post is saved, PostyCal checks its date field and assigns the appropriate category (pre-date or post-date)
+**Manual trigger**: **Run All Schedules Now** on the Schedules tab processes every schedule immediately.
 
-2. **Daily Cron**: Every night at midnight, PostyCal checks all posts in pre-date categories. If their date has passed (plus a 24-hour buffer), they're moved to the post-date category.
+## Per-post overrides
 
-3. **Manual Trigger**: Administrators can run all schedules immediately from the settings page.
+The **Publication Schedule** box on the post editor carries a **Schedule Override** dropdown. It applies to that post only, and to one schedule only — a post covered by two schedules gets an override for each.
 
-## Example Use Cases
+| Option | Effect |
+|--------|--------|
+| **Automatic** | Follow the schedule. The default. |
+| **Hold** | PostyCal makes no changes to this post at all — no term, no status. Use this to pull a post back to draft and have it stay there. |
+| **Force upcoming** | Pin to draft + the Upcoming term, whatever the dates say. |
+| **Force active** | Pin to published + the Active term. Keeps a post live past its expiration date. |
+| **Force past** | Pin to private + the Past term. Retires a post ahead of its expiration date. |
+
+Anything other than Automatic ignores the post's dates. The dates stay saved, so clearing the override returns the post to normal lifecycle handling from wherever its dates place it.
+
+The term is applied as soon as you save; as with automatic posts, the status change is left to the next scheduled run.
+
+## Example configurations
 
 ### Events
 - Post Type: `event`
 - Taxonomy: `event_status`
-- Pre-Date Term: `upcoming`
-- Post-Date Term: `past`
+- Terms: `upcoming` / `active` / `past`
 
 ### Promotions
 - Post Type: `promotion`
 - Taxonomy: `promotion_status`
-- Pre-Date Term: `active`
-- Post-Date Term: `expired`
-
-### Multi-Day Events (Repeater)
-- Field Type: Repeater
-- Sub-field: `event_date`
-- Date Logic: Latest (event stays "upcoming" until final date passes)
+- Terms: `scheduled` / `running` / `expired`
+- Time-Aware: on, for sales that end at a specific time
 
 ## Debugging
 
-Enable debugging by adding to `wp-config.php`:
+Add to `wp-config.php`:
 
 ```php
 define( 'WP_DEBUG', true );
 define( 'WP_DEBUG_LOG', true );
-define( 'POSTYCAL_DEBUG', true ); // Enables verbose logging
+define( 'POSTYCAL_DEBUG', true ); // Verbose logging
 ```
 
-Logs are written to `wp-content/debug.log`.
+Logs are written to `wp-content/debug.log`. Errors and warnings are logged whenever `WP_DEBUG` and `WP_DEBUG_LOG` are on; `POSTYCAL_DEBUG` adds per-post DEBUG lines.
 
-## Hooks & Filters
-
-### Constants
+## Constants
 
 | Constant | Default | Description |
 |----------|---------|-------------|
-| `POSTYCAL_TRANSITION_BUFFER` | `DAY_IN_SECONDS` | Buffer period before transitioning (prevents same-day transitions) |
 | `POSTYCAL_DEBUG` | `false` | Enable verbose debug logging |
+| `POSTYCAL_CRON_HOOK` | `pc_daily_category_check` | Name of the recurring transition event |
 
 ## Uninstallation
 
-When the plugin is deleted through WordPress:
-- All schedule configurations are removed
-- Scheduled cron events are cleared
-- Posts retain their current category assignments
+Deleting the plugin through WordPress removes all schedule, post type, and taxonomy configurations, PostyCal's date meta, and the scheduled event — on every site in a multisite network. Posts, taxonomies, and terms are left in place, since they hold your content.
 
 ## Changelog
+
+### 2.2.0
+- Added a per-post **Schedule Override** dropdown: hold a post untouched, or pin it to Upcoming / Active / Past regardless of its dates
+- Overridden posts are skipped by the date-driven passes and reconciled by their own pass
+- The editor notice now confirms an active override instead of warning about unused dates
+- Go-live and expiration fields are no longer marked `required`, since an overridden post doesn't need them
+
+### 2.1.0
+- Added a post type builder and a taxonomy builder with automatic seed terms
+- Replaced the ACF dependency with PostyCal's own date fields — ACF is no longer required
+- Moved to a three-term lifecycle (Upcoming / Active / Past) with automatic publish and expire
+- Go-live dates are now inclusive: a post dated today goes live today rather than a day late
+- Time-aware schedules now run hourly instead of only at midnight
+- Published posts are stamped with their go-live date rather than the date the draft was created
+- Posts published manually ahead of their go-live date are no longer stranded outside the lifecycle
+- A post with only one of the two dates set now still receives a term
+- Post type and taxonomy slugs are locked after creation, so existing posts and terms can't be orphaned
+- Uninstall now covers every site in a multisite network
+- Removed the unused `POSTYCAL_TRANSITION_BUFFER` constant
 
 ### 2.0.0
 - Complete rewrite with modern PHP practices
 - Added proper class structure (Core, Schedule, Schedule_Manager, Date_Handler, Cron_Handler, Admin, Logger)
 - Added strict type declarations (PHP 8.2+)
-- **Added time-aware transitions** - supports ACF Date/Time Picker fields
+- Added time-aware transitions
 - Improved date handling with DateTimeImmutable
 - Added comprehensive error logging
 - Fixed race condition in term assignment
@@ -140,7 +159,6 @@ When the plugin is deleted through WordPress:
 - Moved JavaScript to external file
 - Added proper uninstall handling
 - Added export/import capability for schedules
-- Improved WordPress coding standards compliance
 
 ### 1.5.0
 - Initial public release

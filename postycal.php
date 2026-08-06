@@ -3,7 +3,7 @@
  * Plugin Name: PostyCal
  * Plugin URI: https://crawforddesigngroup.com/postycal
  * Description: Automatically manages post category transitions based on date fields
- * Version: 2.0.5
+ * Version: 2.2.0
  * Requires at least: 6.0
  * Requires PHP: 8.2
  * Author: Crawford Design Group
@@ -24,14 +24,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // Plugin constants.
-define( 'POSTYCAL_VERSION', '2.0.5' );
+define( 'POSTYCAL_VERSION', '2.2.0' );
 define( 'POSTYCAL_PLUGIN_FILE', __FILE__ );
 define( 'POSTYCAL_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'POSTYCAL_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'POSTYCAL_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
-// Buffer period in seconds (1 day) - configurable constant.
-define( 'POSTYCAL_TRANSITION_BUFFER', DAY_IN_SECONDS );
+// Name of the recurring event that processes schedule transitions.
+define( 'POSTYCAL_CRON_HOOK', 'pc_daily_category_check' );
 
 /**
  * Autoloader for PostyCal classes.
@@ -68,6 +68,21 @@ function postycal_next_midnight(): int {
     $timezone = PostyCal\Date_Handler::get_timezone();
     $midnight  = new \DateTimeImmutable( 'tomorrow midnight', $timezone );
     return $midnight->getTimestamp();
+}
+
+/**
+ * Return the Unix timestamp for the top of the next hour.
+ *
+ * Used when at least one schedule is time-aware and the daily midnight run
+ * is too coarse to honour the configured times.
+ *
+ * @return int Unix timestamp.
+ */
+function postycal_next_hour(): int {
+    $timezone = PostyCal\Date_Handler::get_timezone();
+    $next     = ( new \DateTimeImmutable( 'now', $timezone ) )->modify( '+1 hour' );
+
+    return $next->setTime( (int) $next->format( 'G' ), 0, 0 )->getTimestamp();
 }
 
 /**
@@ -111,11 +126,8 @@ function postycal_activate(): void {
     $post_type_manager->register_all();
     $taxonomy_manager->register_all();
 
-    // Schedule cron if we have schedules.
-    $schedules = get_option( 'pc_schedules', [] );
-    if ( ! empty( $schedules ) && ! wp_next_scheduled( 'pc_daily_category_check' ) ) {
-        wp_schedule_event( postycal_next_midnight(), 'daily', 'pc_daily_category_check' );
-    }
+    // Schedule (or correct the recurrence of) the transition cron.
+    ( new PostyCal\Schedule_Manager() )->sync_cron();
 
     flush_rewrite_rules();
 }
@@ -127,7 +139,7 @@ register_activation_hook( __FILE__, 'postycal_activate' );
  * @return void
  */
 function postycal_deactivate(): void {
-    wp_clear_scheduled_hook( 'pc_daily_category_check' );
+    wp_clear_scheduled_hook( POSTYCAL_CRON_HOOK );
 }
 register_deactivation_hook( __FILE__, 'postycal_deactivate' );
 

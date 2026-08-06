@@ -74,7 +74,9 @@ class Taxonomy {
      */
     public function __construct( array $data ) {
         $this->name         = sanitize_text_field( $data['name'] ?? '' );
-        $this->plural       = sanitize_text_field( $data['plural'] ?? $this->name . 's' );
+        // Use ?: rather than ?? — the admin form always submits the key, so an
+        // omitted plural arrives as an empty string, not null.
+        $this->plural       = sanitize_text_field( $data['plural'] ?? '' ) ?: $this->name . 's';
         $this->slug         = $this->sanitize_slug( $data['slug'] ?? '' );
         $this->description  = sanitize_textarea_field( $data['description'] ?? '' );
         $this->hierarchical = (bool) ( $data['hierarchical'] ?? false );

@@ -177,6 +177,32 @@ class Date_Handler {
     }
 
     /**
+     * Check whether a date has been reached (i.e. is now or earlier).
+     *
+     * This is the inclusive counterpart to is_date_past() and is the correct
+     * comparison for go-live dates: a post whose go-live date is *today* has
+     * reached its go-live date and should be published, whereas is_date_past()
+     * would not report true until the following day.
+     *
+     * When $use_time is false, only the calendar date is compared (time ignored).
+     *
+     * @param DateTimeImmutable      $date     The date to check.
+     * @param DateTimeImmutable|null $now      Reference point (defaults to current time/date).
+     * @param bool                   $use_time Compare full datetime (true) or date only (false).
+     * @return bool True if the date is now or in the past.
+     */
+    public static function is_date_reached( DateTimeImmutable $date, ?DateTimeImmutable $now = null, bool $use_time = false ): bool {
+        if ( $use_time ) {
+            $now = $now ?? self::get_current_datetime();
+            return $date <= $now;
+        }
+
+        $now = $now ?? self::get_current_date();
+
+        return $date->setTime( 0, 0, 0 ) <= $now->setTime( 0, 0, 0 );
+    }
+
+    /**
      * Format a date for display using the site's date format.
      *
      * @param DateTimeImmutable $date   The date to format.

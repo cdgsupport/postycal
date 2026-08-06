@@ -141,6 +141,10 @@ class Taxonomy_Manager {
             return false;
         }
 
+        // The slug keys every term_taxonomy row — changing it would orphan
+        // every existing term. Preserve the stored slug.
+        $data['slug'] = $all[ $index ]->slug;
+
         $taxonomy = new Taxonomy( $data );
 
         if ( ! $taxonomy->is_valid() ) {

@@ -107,8 +107,21 @@ final class Core {
         add_action( 'init', [ $this->taxonomy_manager, 'register_all' ], 6 );
         add_action( 'init', [ $this, 'maybe_flush_rewrites' ], 99 );
 
-        add_action( 'pc_daily_category_check', [ $this->cron_handler, 'process_all_schedules' ] );
+        add_action( POSTYCAL_CRON_HOOK, [ $this->cron_handler, 'process_all_schedules' ] );
         add_action( 'save_post', [ $this->cron_handler, 'assign_term_on_save' ], 20, 1 );
+
+        add_action( 'admin_init', [ $this, 'ensure_cron' ] );
+    }
+
+    /**
+     * Repair the recurring event if it has gone missing or drifted to the
+     * wrong recurrence (e.g. after a database restore, or a migration from a
+     * version that always scheduled it daily).
+     *
+     * @return void
+     */
+    public function ensure_cron(): void {
+        $this->schedule_manager->sync_cron();
     }
 
     /**

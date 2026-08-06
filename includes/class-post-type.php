@@ -81,13 +81,15 @@ class Post_Type {
      */
     public function __construct( array $data ) {
         $this->name         = sanitize_text_field( $data['name'] ?? '' );
-        $this->plural       = sanitize_text_field( $data['plural'] ?? $this->name . 's' );
+        // Use ?: rather than ?? — the admin form always submits the key, so an
+        // omitted plural arrives as an empty string, not null.
+        $this->plural       = sanitize_text_field( $data['plural'] ?? '' ) ?: $this->name . 's';
         $this->slug         = $this->sanitize_slug( $data['slug'] ?? '' );
         $this->description  = sanitize_textarea_field( $data['description'] ?? '' );
         $this->has_archive  = (bool) ( $data['has_archive'] ?? false );
         $this->show_in_rest = (bool) ( $data['show_in_rest'] ?? true );
         $this->supports     = $this->sanitize_supports( $data['supports'] ?? [ 'title', 'editor' ] );
-        $this->menu_icon    = sanitize_text_field( $data['menu_icon'] ?? 'dashicons-admin-post' );
+        $this->menu_icon    = sanitize_text_field( $data['menu_icon'] ?? '' ) ?: 'dashicons-admin-post';
     }
 
     /**

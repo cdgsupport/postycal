@@ -119,14 +119,57 @@ class Admin {
             'postycal-admin',
             'postycal',
             [
-                'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
-                'nonce'      => wp_create_nonce( self::NONCE_ACTION ),
-                'schedules'  => $this->schedule_manager->export(),
-                'postTypes'  => $this->post_type_manager->export(),
-                'taxonomies' => $this->taxonomy_manager->export(),
-                'i18n'       => $this->get_i18n_strings(),
+                'ajaxUrl'         => admin_url( 'admin-ajax.php' ),
+                'nonce'           => wp_create_nonce( self::NONCE_ACTION ),
+                'schedules'       => $this->schedule_manager->export(),
+                'postTypes'       => $this->post_type_manager->export(),
+                'taxonomies'      => $this->taxonomy_manager->export(),
+                'postTypeChoices' => $this->get_post_type_choices(),
+                'i18n'            => $this->get_i18n_strings(),
             ]
         );
+    }
+
+    /**
+     * Build the post type list offered by the Schedule and Taxonomy modals.
+     *
+     * Merges the registered public post types with PostyCal's own stored
+     * definitions. A post type created moments ago has been written to the
+     * option but is not registered with WordPress until the next request, so
+     * relying on get_post_types() alone would hide it from these pickers
+     * until the page is reloaded.
+     *
+     * @return array<int, array{slug: string, label: string}>
+     */
+    private function get_post_type_choices(): array {
+        $choices = [];
+
+        $managed  = array_map( fn( Post_Type $pt ): string => $pt->slug, $this->post_type_manager->get_all() );
+        $stale    = array_diff( $this->post_type_manager->get_registered_slugs(), $managed );
+
+        foreach ( get_post_types( [ 'public' => true ], 'objects' ) as $post_type ) {
+            // A PostyCal type deleted earlier in this request is still
+            // registered with WordPress — don't offer it.
+            if ( in_array( $post_type->name, $stale, true ) ) {
+                continue;
+            }
+
+            $choices[ $post_type->name ] = [
+                'slug'  => $post_type->name,
+                'label' => $post_type->label,
+            ];
+        }
+
+        foreach ( $this->post_type_manager->get_all() as $post_type ) {
+            if ( ! isset( $choices[ $post_type->slug ] ) ) {
+                $choices[ $post_type->slug ] = [
+                    'slug'  => $post_type->slug,
+                    'label' => $post_type->plural,
+                ];
+            }
+        }
+
+        return array_values( $choices );
     }
 
     /**
@@ -151,10 +194,13 @@ class Admin {
             'editSchedule'        => __( 'Edit Schedule', 'postycal' ),
             'published'           => __( 'published', 'postycal' ),
             'expired'             => __( 'expired', 'postycal' ),
+            'pinned'              => __( 'overridden', 'postycal' ),
             'selectPostTypeFirst' => __( 'Select Post Type first', 'postycal' ),
             'selectTaxonomyFirst' => __( 'Select Taxonomy first', 'postycal' ),
             'noTaxonomiesFound'   => __( 'No taxonomies found for this post type', 'postycal' ),
             'errorLoadingTax'     => __( 'Error loading taxonomies', 'postycal' ),
+            'selectTaxonomy'      => __( 'Select a taxonomy', 'postycal' ),
+            'selectPostType'      => __( 'Select Post Type', 'postycal' ),
             'selectTerm'          => __( 'Select a term', 'postycal' ),
             'noTermsFound'        => __( 'No terms found', 'postycal' ),
             'errorLoadingTerms'   => __( 'Error loading terms', 'postycal' ),
@@ -264,6 +310,7 @@ class Admin {
                 <li><strong><?php esc_html_e( 'On expiration date:', 'postycal' ); ?></strong> <?php esc_html_e( 'PostyCal sets the post to private and assigns the Past term.', 'postycal' ); ?></li>
             </ol>
             <p><strong><?php esc_html_e( 'Recommended setup order:', 'postycal' ); ?></strong> <?php esc_html_e( 'Post Types → Taxonomies (with seed terms) → Schedules.', 'postycal' ); ?></p>
+            <p><strong><?php esc_html_e( 'Per-post overrides:', 'postycal' ); ?></strong> <?php esc_html_e( 'Any individual post can opt out of its schedule from the Publication Schedule box on the post editor — held untouched, or pinned to a state regardless of its dates.', 'postycal' ); ?></p>
         </div>
         <?php
     }
@@ -332,8 +379,8 @@ class Admin {
                             <td>
                                 <select id="postycal-post-type" name="post_type" required>
                                     <option value=""><?php esc_html_e( 'Select Post Type', 'postycal' ); ?></option>
-                                    <?php foreach ( get_post_types( [ 'public' => true ], 'objects' ) as $pt ) : ?>
-                                        <option value="<?php echo esc_attr( $pt->name ); ?>"><?php echo esc_html( $pt->label ); ?></option>
+                                    <?php foreach ( $this->get_post_type_choices() as $choice ) : ?>
+                                        <option value="<?php echo esc_attr( $choice['slug'] ); ?>"><?php echo esc_html( $choice['label'] ); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                                 <p class="description"><?php esc_html_e( 'Selecting a post type loads its registered taxonomies below.', 'postycal' ); ?></p>
@@ -598,10 +645,10 @@ class Admin {
                             <th><?php esc_html_e( 'Assign to Post Types', 'postycal' ); ?> <span style="color:#d63638;">*</span></th>
                             <td>
                                 <fieldset id="postycal-tax-post-types">
-                                    <?php foreach ( get_post_types( [ 'public' => true ], 'objects' ) as $pt ) : ?>
+                                    <?php foreach ( $this->get_post_type_choices() as $choice ) : ?>
                                         <label>
-                                            <input type="checkbox" name="post_types[]" value="<?php echo esc_attr( $pt->name ); ?>">
-                                            <?php echo esc_html( $pt->label ); ?> <code>(<?php echo esc_html( $pt->name ); ?>)</code>
+                                            <input type="checkbox" name="post_types[]" value="<?php echo esc_attr( $choice['slug'] ); ?>">
+                                            <?php echo esc_html( $choice['label'] ); ?> <code>(<?php echo esc_html( $choice['slug'] ); ?>)</code>
                                         </label><br>
                                     <?php endforeach; ?>
                                 </fieldset>
@@ -675,6 +722,7 @@ class Admin {
     private function render_schedule_date_fields( \WP_Post $post, Schedule $schedule ): void {
         $go_live    = get_post_meta( $post->ID, $schedule->get_go_live_meta_key(), true );
         $expiration = get_post_meta( $post->ID, $schedule->get_expiration_meta_key(), true );
+        $override   = Override::sanitize( get_post_meta( $post->ID, $schedule->get_override_meta_key(), true ) );
         $input_type = $schedule->use_time ? 'datetime-local' : 'date';
         $key        = $schedule->schedule_key;
 
@@ -684,14 +732,29 @@ class Admin {
         if ( $multiple ) {
             echo '<h4 style="margin:0 0 8px;">' . esc_html( $schedule->name ) . '</h4>';
         }
+
+        // Note: the date fields are deliberately not marked `required`. An
+        // overridden post doesn't need them, and the classic editor would
+        // otherwise refuse to save.
         ?>
         <p>
             <label for="postycal_go_live_<?php echo esc_attr( $key ); ?>"><strong><?php esc_html_e( 'Go-Live Date', 'postycal' ); ?></strong></label><br>
-            <input type="<?php echo esc_attr( $input_type ); ?>" id="postycal_go_live_<?php echo esc_attr( $key ); ?>" name="postycal_go_live_<?php echo esc_attr( $key ); ?>" value="<?php echo esc_attr( $go_live ); ?>" class="widefat postycal-date-field" required>
+            <input type="<?php echo esc_attr( $input_type ); ?>" id="postycal_go_live_<?php echo esc_attr( $key ); ?>" name="postycal_go_live_<?php echo esc_attr( $key ); ?>" value="<?php echo esc_attr( $go_live ); ?>" class="widefat postycal-date-field">
         </p>
         <p>
             <label for="postycal_expiration_<?php echo esc_attr( $key ); ?>"><strong><?php esc_html_e( 'Expiration Date', 'postycal' ); ?></strong></label><br>
-            <input type="<?php echo esc_attr( $input_type ); ?>" id="postycal_expiration_<?php echo esc_attr( $key ); ?>" name="postycal_expiration_<?php echo esc_attr( $key ); ?>" value="<?php echo esc_attr( $expiration ); ?>" class="widefat postycal-date-field" required>
+            <input type="<?php echo esc_attr( $input_type ); ?>" id="postycal_expiration_<?php echo esc_attr( $key ); ?>" name="postycal_expiration_<?php echo esc_attr( $key ); ?>" value="<?php echo esc_attr( $expiration ); ?>" class="widefat postycal-date-field">
+        </p>
+        <p>
+            <label for="postycal_override_<?php echo esc_attr( $key ); ?>"><strong><?php esc_html_e( 'Schedule Override', 'postycal' ); ?></strong></label><br>
+            <select id="postycal_override_<?php echo esc_attr( $key ); ?>" name="postycal_override_<?php echo esc_attr( $key ); ?>" class="widefat postycal-override-field">
+                <?php foreach ( Override::choices() as $value => $label ) : ?>
+                    <option value="<?php echo esc_attr( $value ); ?>" <?php selected( $override, $value ); ?>>
+                        <?php echo esc_html( $label ); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <span class="description"><?php esc_html_e( 'Anything other than Automatic ignores the dates above for this post.', 'postycal' ); ?></span>
         </p>
         <?php
     }
@@ -721,6 +784,16 @@ class Admin {
             foreach ( [ 'postycal_go_live_' . $key => $schedule->get_go_live_meta_key(), 'postycal_expiration_' . $key => $schedule->get_expiration_meta_key() ] as $field => $meta_key ) {
                 if ( isset( $_POST[ $field ] ) ) {
                     update_post_meta( $post_id, $meta_key, sanitize_text_field( wp_unslash( $_POST[ $field ] ) ) );
+                }
+            }
+
+            if ( isset( $_POST[ 'postycal_override_' . $key ] ) ) {
+                $override = Override::sanitize( wp_unslash( $_POST[ 'postycal_override_' . $key ] ) );
+
+                if ( Override::is_automatic( $override ) ) {
+                    delete_post_meta( $post_id, $schedule->get_override_meta_key() );
+                } else {
+                    update_post_meta( $post_id, $schedule->get_override_meta_key(), $override );
                 }
             }
         }
@@ -760,18 +833,59 @@ class Admin {
         }
 
         foreach ( $this->schedule_manager->get_for_post_type( $post->post_type ) as $schedule ) {
+            $override = Override::sanitize( get_post_meta( $post->ID, $schedule->get_override_meta_key(), true ) );
+
+            // An overridden post ignores its dates, so warning about them
+            // would be noise. Confirm the override instead.
+            if ( ! Override::is_automatic( $override ) ) {
+                $this->render_schedule_notice(
+                    sprintf(
+                        /* translators: 1: schedule name, 2: override label */
+                        __( 'Schedule "%1$s" is overridden for this post: %2$s', 'postycal' ),
+                        $schedule->name,
+                        Override::label( $override )
+                    ),
+                    'info'
+                );
+                continue;
+            }
+
             $go_live    = get_post_meta( $post->ID, $schedule->get_go_live_meta_key(), true );
             $expiration = get_post_meta( $post->ID, $schedule->get_expiration_meta_key(), true );
 
             if ( empty( $go_live ) || empty( $expiration ) ) {
-                ?>
-                <div class="notice notice-warning">
-                    <p><strong><?php esc_html_e( 'PostyCal:', 'postycal' ); ?></strong> <?php esc_html_e( 'This post is missing a go-live or expiration date. It will not be published automatically until both dates are set.', 'postycal' ); ?></p>
-                </div>
-                <?php
+                $this->render_schedule_notice(
+                    __( 'This post is missing a go-live or expiration date. It will not be published automatically until both dates are set.', 'postycal' )
+                );
+                return;
+            }
+
+            $go_live_date    = Date_Handler::parse_date( $go_live );
+            $expiration_date = Date_Handler::parse_date( $expiration );
+
+            if ( null !== $go_live_date && null !== $expiration_date && $expiration_date <= $go_live_date ) {
+                $this->render_schedule_notice(
+                    __( 'The expiration date is on or before the go-live date. This post will be sent straight to the past term instead of going live.', 'postycal' )
+                );
                 return;
             }
         }
+    }
+
+    /**
+     * Render a PostyCal notice on a post edit screen.
+     *
+     * @param string $message The message to display.
+     * @param string $type    Notice type: 'warning' or 'info'.
+     * @return void
+     */
+    private function render_schedule_notice( string $message, string $type = 'warning' ): void {
+        $type = in_array( $type, [ 'warning', 'info' ], true ) ? $type : 'warning';
+        ?>
+        <div class="notice notice-<?php echo esc_attr( $type ); ?>">
+            <p><strong><?php esc_html_e( 'PostyCal:', 'postycal' ); ?></strong> <?php echo esc_html( $message ); ?></p>
+        </div>
+        <?php
     }
 
     // -------------------------------------------------------------------------
@@ -855,7 +969,11 @@ class Admin {
             wp_send_json_error( [ 'message' => __( 'Failed to save post type. The slug may already exist.', 'postycal' ) ] );
         }
 
-        wp_send_json_success( [ 'message' => __( 'Post type saved.', 'postycal' ), 'postTypes' => $this->post_type_manager->export() ] );
+        wp_send_json_success( [
+            'message'         => __( 'Post type saved.', 'postycal' ),
+            'postTypes'       => $this->post_type_manager->export(),
+            'postTypeChoices' => $this->get_post_type_choices(),
+        ] );
     }
 
     public function ajax_delete_post_type(): void {
@@ -868,7 +986,11 @@ class Admin {
             wp_send_json_error( [ 'message' => __( 'Failed to delete post type.', 'postycal' ) ] );
         }
 
-        wp_send_json_success( [ 'message' => __( 'Post type deleted.', 'postycal' ), 'postTypes' => $this->post_type_manager->export() ] );
+        wp_send_json_success( [
+            'message'         => __( 'Post type deleted.', 'postycal' ),
+            'postTypes'       => $this->post_type_manager->export(),
+            'postTypeChoices' => $this->get_post_type_choices(),
+        ] );
     }
 
     // -------------------------------------------------------------------------
