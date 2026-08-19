@@ -1,0 +1,43 @@
+name: CI
+
+# Fast checks on every push and pull request, so a syntax error or a
+# half-finished version bump is caught here rather than at release time.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint and package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show PHP version
+        run: php -v
+
+      - name: Lint PHP
+        run: |
+          find . -name '*.php' -not -path './.git/*' -print0 \
+            | xargs -0 -n1 php -l
+
+      - name: Lint JavaScript
+        run: node --check admin/js/admin.js
+
+      # Runs the same script the release uses, minus the tag comparison. It
+      # asserts the three version declarations agree and that the plugin still
+      # packages, so neither can break without anyone noticing until a tag.
+      - name: Check versions agree and the plugin packages
+        run: |
+          chmod +x bin/build-release.sh
+          bin/build-release.sh
