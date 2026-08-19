@@ -156,7 +156,7 @@ bin/build-release.sh
 - When the release already exists, the build attaches the zip to it rather than failing, and supplies notes only if the release has none — hand-written notes are never overwritten
 
 ### 2.3.0
-- Published without a build attached and superseded by 2.3.1. No plugin changes; use 2.3.1 instead
+- Withdrawn. Tagged and published in error with no build attached, and never distributed; the tag and release have been deleted. The version number is skipped rather than reused
 
 ### 2.2.0
 - Added a per-post **Schedule Override** dropdown: hold a post untouched, or pin it to Upcoming / Active / Past regardless of its dates
