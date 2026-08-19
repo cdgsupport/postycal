@@ -1,6 +1,8 @@
 name: Release
 
-# Cut a release by tagging: `git tag v2.2.0 && git push origin v2.2.0`.
+# Cut a release either way:
+#   - `git tag v2.3.1 && git push origin v2.3.1`  (workflow creates the release)
+#   - Publish a release from the GitHub UI          (workflow attaches the zip)
 # The build refuses to publish if the tag and the plugin's declared version
 # disagree, or if anything fails to lint.
 
@@ -8,6 +10,12 @@ on:
   push:
     tags:
       - 'v*'
+  # Tags created through the Releases web UI fire `release` and `create`, but
+  # NOT `push` — so a release cut that way would otherwise never get a build.
+  # Releases this workflow creates itself use GITHUB_TOKEN, which by design
+  # cannot trigger another run, so there is no recursion here.
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -26,11 +34,11 @@ jobs:
       - name: Check out the tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref }}
 
       - name: Resolve tag and version
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}"
           echo "TAG=$TAG"          >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}"  >> "$GITHUB_ENV"
 
@@ -58,8 +66,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" \
-            "dist/postycal-${VERSION}.zip" \
-            --title "PostyCal $VERSION" \
-            --notes-file release-notes.md \
-            --verify-tag
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — attaching the build to it."
+            gh release upload "$TAG" "dist/postycal-${VERSION}.zip" --clobber
+
+            # Only supply notes if the release has none, so hand-written
+            # notes from the web UI are never overwritten.
+            if [ -z "$(gh release view "$TAG" --json body --jq '.body')" ]; then
+              gh release edit "$TAG" --notes-file release-notes.md
+            fi
+          else
+            gh release create "$TAG" \
+              "dist/postycal-${VERSION}.zip" \
+              --title "PostyCal $VERSION" \
+              --notes-file release-notes.md \
+              --verify-tag
+          fi

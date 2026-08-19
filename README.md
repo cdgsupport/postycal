@@ -1,6 +1,6 @@
 # PostyCal
 
-**Version:** 2.2.0  
+**Version:** 2.3.1  
 **Requires WordPress:** 6.0+  
 **Requires PHP:** 8.2+  
 **License:** GPL v3 or later
@@ -128,16 +128,18 @@ Deleting the plugin through WordPress removes all schedule, post type, and taxon
 
 ## Releasing
 
-Releases are built and published by GitHub Actions when a `v*` tag is pushed.
+Releases are built and published by GitHub Actions.
 
 ```bash
-bin/bump-version.sh 2.3.0     # sets the version in postycal.php and README.md
-# add a "### 2.3.0" entry to the changelog below, then commit
-git tag v2.3.0
-git push origin main v2.3.0
+bin/bump-version.sh 2.4.0     # sets the version in postycal.php and README.md
+# add a "### 2.4.0" entry to the changelog below, then commit
+git tag v2.4.0
+git push origin main v2.4.0
 ```
 
-The workflow lints, builds `postycal-2.3.0.zip`, and publishes it as a GitHub Release with the notes taken from that version's changelog entry. The zip contains a single `postycal/` directory and is installable through **Plugins → Add New → Upload Plugin**.
+The workflow lints, builds `postycal-2.4.0.zip`, and publishes it as a GitHub Release with the notes taken from that version's changelog entry.
+
+It also runs when you publish a release from the GitHub web UI, attaching the zip to the release you just made. That path is worth knowing about: a tag created through the Releases UI fires `release` and `create` events but **not** `push`, so without this trigger a UI-cut release would silently ship with no plugin zip. The zip contains a single `postycal/` directory and is installable through **Plugins → Add New → Upload Plugin**.
 
 The build **fails rather than publishes** if the tag and the versions declared in `postycal.php` and `README.md` disagree. Versions are read from the tagged commit, not your working tree, so an uncommitted bump can't ship a mislabelled zip.
 
@@ -148,6 +150,13 @@ bin/build-release.sh
 ```
 
 ## Changelog
+
+### 2.3.1
+- The release workflow now also runs when a release is published from the GitHub UI. Tags created that way fire `release` and `create` but not `push`, so a UI-cut release was getting no plugin zip attached
+- When the release already exists, the build attaches the zip to it rather than failing, and supplies notes only if the release has none — hand-written notes are never overwritten
+
+### 2.3.0
+- Published without a build attached and superseded by 2.3.1. No plugin changes; use 2.3.1 instead
 
 ### 2.2.0
 - Added a per-post **Schedule Override** dropdown: hold a post untouched, or pin it to Upcoming / Active / Past regardless of its dates
