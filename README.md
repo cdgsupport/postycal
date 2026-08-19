@@ -1,6 +1,6 @@
 # PostyCal
 
-**Version:** 2.3.1  
+**Version:** 2.4.0  
 **Requires WordPress:** 6.0+  
 **Requires PHP:** 8.2+  
 **License:** GPL v3 or later
@@ -19,6 +19,7 @@ No ACF required. PostyCal registers its own date fields, and can create the post
 - **Time-aware transitions**: optionally compare exact times instead of whole days
 - **Immediate term assignment**: the correct term is applied the moment a post is saved
 - **Per-post overrides**: take any single post out of its schedule without touching the schedule itself
+- **Updates in the dashboard**: new GitHub Releases are offered as plugin updates, like any plugin from wordpress.org
 - **Manual trigger**: run every schedule on demand from the settings page
 
 ## Requirements
@@ -126,6 +127,18 @@ Logs are written to `wp-content/debug.log`. Errors and warnings are logged whene
 
 Deleting the plugin through WordPress removes all schedule, post type, and taxonomy configurations, PostyCal's date meta, and the scheduled event — on every site in a multisite network. Posts, taxonomies, and terms are left in place, since they hold your content.
 
+## Updates
+
+Once installed, PostyCal checks GitHub for new releases and offers them under **Dashboard → Updates** and on the Plugins screen, so sites update in place rather than by re-uploading a zip.
+
+This works through the `Update URI` header, which does two things: it routes the check to PostyCal's own updater, and it stops WordPress ever accepting an update for this plugin from wordpress.org — which would otherwise be possible for anyone who published a plugin there under the slug `postycal`.
+
+The check is cached for 6 hours, or 15 minutes after a failure so a GitHub outage doesn't mean a request on every page load. **Check again** on the Updates screen bypasses the cache.
+
+A release is only offered if it has a plugin zip attached. Drafts and pre-releases are ignored, and so is a release carrying only GitHub's auto-generated source archives — those unpack to a directory named after the tag, so WordPress would install a second copy of the plugin instead of upgrading the existing one.
+
+The repository is public, so no tokens or credentials are involved on either the check or the download.
+
 ## Releasing
 
 Releases are built and published by GitHub Actions.
@@ -150,6 +163,12 @@ bin/build-release.sh
 ```
 
 ## Changelog
+
+### 2.4.0
+- Added in-dashboard updates: new GitHub Releases are now offered as plugin updates under Dashboard → Updates, rather than needing a manual zip upload
+- Declares an `Update URI`, which also prevents WordPress accepting an update for this plugin from wordpress.org
+- Release lookups are cached for 6 hours, and for 15 minutes after a failure; "Check again" bypasses the cache
+- Releases without a plugin zip attached, and drafts and pre-releases, are never offered as updates
 
 ### 2.3.1
 - The release workflow now also runs when a release is published from the GitHub UI. Tags created that way fire `release` and `create` but not `push`, so a UI-cut release was getting no plugin zip attached

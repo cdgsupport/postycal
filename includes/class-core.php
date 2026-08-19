@@ -50,6 +50,11 @@ final class Core {
     private ?Admin $admin = null;
 
     /**
+     * @var Updater
+     */
+    private Updater $updater;
+
+    /**
      * Get singleton instance.
      *
      * @return Core
@@ -79,6 +84,10 @@ final class Core {
         $this->taxonomy_manager  = new Taxonomy_Manager();
         $this->schedule_manager  = new Schedule_Manager();
         $this->cron_handler      = new Cron_Handler( $this->schedule_manager );
+        $this->updater           = new Updater();
+
+        // Registered unconditionally — update checks also run from wp-cron.
+        $this->updater->register();
 
         if ( is_admin() ) {
             $this->admin = new Admin(
